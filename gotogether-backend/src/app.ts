@@ -10,12 +10,17 @@ import errorHandler from './middleware/errorHandler';
 import { AppError } from './utils/response';
 
 // Import Routes
+import authRoutes from './modules/auth/auth.routes';
+import userRoutes from './modules/users/user.routes';
 import rideRoutes from './modules/rides/ride.routes';
+import ratingRoutes from './modules/rides/rating.routes';
+import notificationRoutes from './modules/notifications/notification.routes';
+import sosRoutes from './modules/admin/sos.routes';
+import adminRoutes from './modules/admin/admin.routes';
 
 dotenv.config();
 
 const app: Application = express();
-
 
 // Security Middlewares
 app.use(helmet());
@@ -44,10 +49,13 @@ app.get('/health', (req, res) => {
   res.status(200).json({ success: true, message: 'Server is healthy' });
 });
 
-// app.use('/api/v1/auth', authRoutes);
-// app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/rides', rideRoutes);
-
+app.use('/api/v1/ratings', ratingRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/sos', sosRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // 404 Handler
 app.all('*', (req: Request, res: Response, next: NextFunction) => {

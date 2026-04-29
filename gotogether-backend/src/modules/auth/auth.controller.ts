@@ -1,25 +1,52 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { asyncHandler, formatResponse, AppError } from '../../utils/response';
 import User from '../users/user.model';
 import redisClient from '../../config/redis';
+import { logger } from '../../server';
 
 const generateTokens = (id: string, role: string, phone: string) => {
   const accessToken = jwt.sign({ id, role, phone }, process.env.JWT_ACCESS_SECRET as string, {
-    expiresIn: process.env.JWT_ACCESS_EXPIRES || '15m',
+    expiresIn: '15m',
   });
   const refreshToken = jwt.sign({ id }, process.env.JWT_REFRESH_SECRET as string, {
-    expiresIn: process.env.JWT_REFRESH_EXPIRES || '7d',
+    expiresIn: '7d',
   });
   return { accessToken, refreshToken };
 };
 
-export const sendOTP = asyncHandler(async (req: Request, res: Response) => {
+export const sendOTP = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { phone } = req.body;
-  const otp = '123456'; // Default for testing as per common dev pattern
   
+  // 1. Rate Limiting Check
+  const attemptsKey = `otp_attempts:${phone}`;
+  const attempts = await redisClient.get(attemptsKey);
+  if (attempts && parseInt(attempts) >= 3) {
+    return next(new AppError('Too many attempts. Please try again after 10 minutes.', 429));
+  }
+
+  // 2. Generate OTP
+  const otp = crypto.randomInt(100000, 999999).toString();
+  
+  // 3. Store in Redis
   await redisClient.setEx(`otp:${phone}`, 600, otp);
   
+  // 4. Increment attempts
+  if (!attempts) {
+    await redisClient.setEx(attemptsKey, 600, '1');
+  } else {
+    await redisClient.incr(attemptsKey);
+  }
+
+  // 5. In development, log to console
+  if (process.env.NODE_ENV === 'development') {
+    logger.info(`[DEV] OTP for ${phone}: ${otp}`);
+  } else {
+    // TODO: Integration with SMS Provider (Twilio/MSG91)
+    logger.info(`SMS sent to ${phone}`);
+  }
+
   return formatResponse(res, 200, 'OTP sent successfully', { expiresIn: 600 });
 });
 
@@ -27,9 +54,19 @@ export const verifyOTP = asyncHandler(async (req: Request, res: Response, next: 
   const { phone, otp } = req.body;
   
   const storedOtp = await redisClient.get(`otp:${phone}`);
-  if (!storedOtp || storedOtp !== otp) {
-    return next(new AppError('Invalid or expired OTP', 400));
+  if (!storedOtp) {
+    return next(new AppError('OTP expired or not requested', 400));
   }
+
+  // Constant-time comparison
+  const isMatch = crypto.timingSafeEqual(Buffer.from(storedOtp), Buffer.from(otp));
+  if (!isMatch) {
+    return next(new AppError('Invalid OTP', 400));
+  }
+
+  // Cleanup
+  await redisClient.del(`otp:${phone}`);
+  await redisClient.del(`otp_attempts:${phone}`);
 
   let user = await User.findOne({ phone });
   let isNewUser = false;
@@ -41,11 +78,10 @@ export const verifyOTP = asyncHandler(async (req: Request, res: Response, next: 
 
   const { accessToken, refreshToken } = generateTokens(user.id, user.role, user.phone);
   
-  // Store refresh token in user doc
+  // Update last active
+  user.lastActive = new Date();
   user.refreshTokens.push(refreshToken);
   await user.save();
-
-  await redisClient.del(`otp:${phone}`);
 
   return formatResponse(res, 200, 'Logged in successfully', {
     accessToken,
