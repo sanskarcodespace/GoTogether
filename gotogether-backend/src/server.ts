@@ -1,11 +1,14 @@
 import mongoose from 'mongoose';
 import http from 'http';
-import { Server } from 'socket.io';
 import app from './app';
 import winston from 'winston';
+import { initSocket } from './utils/socket';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // Logger configuration
-const logger = winston.createLogger({
+export const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
@@ -21,21 +24,8 @@ const logger = winston.createLogger({
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
 
-// Socket.io setup
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
-  },
-});
-
-io.on('connection', (socket) => {
-  logger.info(`User connected: ${socket.id}`);
-
-  socket.on('disconnect', () => {
-    logger.info(`User disconnected: ${socket.id}`);
-  });
-});
+// Initialize Socket.io
+export const io = initSocket(server);
 
 // Database connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/gotogether';
@@ -62,4 +52,8 @@ process.on('unhandledRejection', (err: any) => {
   });
 });
 
-export { io, logger };
+process.on('uncaughtException', (err: any) => {
+  logger.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
+  logger.error(err.name, err.message);
+  process.exit(1);
+});

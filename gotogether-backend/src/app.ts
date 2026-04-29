@@ -6,10 +6,16 @@ import hpp from 'hpp';
 import mongoSanitize from 'express-mongo-sanitize';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import errorHandler from './middleware/errorHandler';
+import { AppError } from './utils/response';
+
+// Import Routes
+import rideRoutes from './modules/rides/ride.routes';
 
 dotenv.config();
 
 const app: Application = express();
+
 
 // Security Middlewares
 app.use(helmet());
@@ -19,33 +25,36 @@ app.use(mongoSanitize());
 
 // Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again after 15 minutes',
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again after 15 minutes',
+  },
 });
 app.use('/api', limiter);
 
 // Standard Middlewares
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(morgan('dev'));
 
 // Routes
-app.get('/', (req: Request, res: Response) => {
-  res.status(200).json({
-    status: 'success',
-    message: 'Welcome to GoTogether API',
-  });
+app.get('/health', (req, res) => {
+  res.status(200).json({ success: true, message: 'Server is healthy' });
 });
 
-// Error Handling Middleware
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  const statusCode = err.statusCode || 500;
-  res.status(statusCode).json({
-    status: 'error',
-    message: err.message || 'Internal Server Error',
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
-  });
+// app.use('/api/v1/auth', authRoutes);
+// app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/rides', rideRoutes);
+
+
+// 404 Handler
+app.all('*', (req: Request, res: Response, next: NextFunction) => {
+  next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 });
+
+// Global Error Handler
+app.use(errorHandler);
 
 export default app;
