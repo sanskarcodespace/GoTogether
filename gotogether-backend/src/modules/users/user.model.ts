@@ -1,65 +1,96 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import bcrypt from 'bcryptjs';
 
 export interface IUser extends Document {
-  phoneNumber: string;
-  firstName?: string;
-  lastName?: string;
+  phone: string;
   email?: string;
+  name?: string;
   profilePhoto?: string;
-  role: 'provider' | 'seeker' | 'admin';
+  gender?: 'male' | 'female' | 'other' | 'prefer_not_to_say';
+  role: 'user' | 'admin';
   isVerified: boolean;
-  rating: number;
-  totalRides: number;
-  comparePassword(password: string): Promise<boolean>;
+  isActive: boolean;
+  isBanned: boolean;
+  banReason?: string;
+  vehicle?: {
+    type: 'bike' | 'car';
+    model: string;
+    color: string;
+    plateNumber: string;
+    isVerified: boolean;
+  };
+  rating: {
+    asProvider: { average: number; count: number };
+    asSeeker: { average: number; count: number };
+  };
+  stats: {
+    totalRidesAsProvider: number;
+    totalRidesAsSeeker: number;
+    totalEarnings: number;
+  };
+  emergencyContact?: {
+    name: string;
+    phone: string;
+  };
+  fcmToken?: string;
+  refreshTokens: string[];
+  lastActive: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const userSchema: Schema = new Schema(
   {
-    phoneNumber: {
+    phone: { type: String, unique: true, required: true, index: true, trim: true },
+    email: { type: String, sparse: true, trim: true, lowercase: true },
+    name: { type: String, trim: true },
+    profilePhoto: { type: String },
+    gender: {
       type: String,
-      required: true,
-      unique: true,
-      trim: true,
+      enum: ['male', 'female', 'other', 'prefer_not_to_say'],
     },
-    firstName: {
-      type: String,
-      trim: true,
-    },
-    lastName: {
-      type: String,
-      trim: true,
-    },
-    email: {
-      type: String,
-      trim: true,
-      lowercase: true,
-    },
-    profilePhoto: {
-      type: String,
-    },
-    role: {
-      type: String,
-      enum: ['provider', 'seeker', 'admin'],
-      default: 'seeker',
-    },
-    isVerified: {
-      type: Boolean,
-      default: false,
+    role: { type: String, enum: ['user', 'admin'], default: 'user' },
+    isVerified: { type: Boolean, default: false },
+    isActive: { type: Boolean, default: true },
+    isBanned: { type: Boolean, default: false },
+    banReason: { type: String },
+    vehicle: {
+      type: { type: String, enum: ['bike', 'car'] },
+      model: String,
+      color: String,
+      plateNumber: String,
+      isVerified: { type: Boolean, default: false },
     },
     rating: {
-      type: Number,
-      default: 5.0,
+      asProvider: {
+        average: { type: Number, default: 5.0 },
+        count: { type: Number, default: 0 },
+      },
+      asSeeker: {
+        average: { type: Number, default: 5.0 },
+        count: { type: Number, default: 0 },
+      },
     },
-    totalRides: {
-      type: Number,
-      default: 0,
+    stats: {
+      totalRidesAsProvider: { type: Number, default: 0 },
+      totalRidesAsSeeker: { type: Number, default: 0 },
+      totalEarnings: { type: Number, default: 0 },
     },
+    emergencyContact: {
+      name: String,
+      phone: String,
+    },
+    fcmToken: { type: String },
+    refreshTokens: [String],
+    lastActive: { type: Date, default: Date.now },
   },
   {
     timestamps: true,
   }
 );
+
+// Indexes
+userSchema.index({ isActive: 1, isBanned: 1 });
+userSchema.index({ createdAt: -1 });
 
 const User = mongoose.model<IUser>('User', userSchema);
 
