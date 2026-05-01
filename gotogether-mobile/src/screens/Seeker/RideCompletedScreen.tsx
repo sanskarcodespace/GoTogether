@@ -1,16 +1,64 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
+import RazorpayCheckout from 'react-native-razorpay';
 import { Colors } from '../../constants/Colors';
 import { Typography } from '../../constants/Typography';
 import { Spacing } from '../../constants/Spacing';
-import { Button, SafeScreen, Card, StarRating, Input } from '../../components';
+import { Button, SafeScreen, Card, StarRating, Input, LoadingOverlay } from '../../components';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuthStore } from '../../store/authStore';
+import { useRideStore } from '../../store/rideStore';
+import { paymentService } from '../../services/paymentService';
+import { useApi } from '../../hooks/useApi';
 
-const RideCompletedScreen = ({ navigation }: any) => {
+const RideCompletedScreen = ({ navigation, route }: any) => {
   const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState('');
+  const { user } = useAuthStore();
+  const { activeRide } = useRideStore();
+  
+  const { isLoading: isCreatingOrder, request: createOrder } = useApi(paymentService.createOrder);
+  const { isLoading: isVerifying, request: verifyPayment } = useApi(paymentService.verifyPayment);
+
+  const handlePayment = async () => {
+    try {
+      if (!activeRide) return;
+
+      const amount = activeRide.price || 150;
+      const order = await createOrder(amount * 100, activeRide._id);
+
+      const options = {
+        description: 'Ride Fare Payment',
+        image: 'https://your-logo-url.png', // Optional
+        currency: order.currency,
+        key: order.key,
+        amount: order.amount,
+        name: 'GoTogether',
+        order_id: order.orderId,
+        prefill: {
+          email: user?.email || '',
+          contact: user?.phone || '',
+          name: user?.name || ''
+        },
+        theme: { color: Colors.primary }
+      };
+
+      RazorpayCheckout.open(options).then(async (data: any) => {
+        await verifyPayment(data, activeRide._id);
+        Alert.alert('Success', 'Payment verified successfully!');
+        navigation.navigate('MainTabs');
+      }).catch((error: any) => {
+        Alert.alert('Payment Failed', error.description || 'Something went wrong');
+      });
+
+    } catch (err) {
+      // Error handled by useApi
+    }
+  };
 
   return (
     <SafeScreen style={styles.container}>
+      <LoadingOverlay visible={isCreatingOrder || isVerifying} />
       <View style={styles.content}>
         <View style={styles.successIcon}>
           <Ionicons name="checkmark-circle" size={80} color={Colors.secondary} />
@@ -21,7 +69,7 @@ const RideCompletedScreen = ({ navigation }: any) => {
         <Card variant="flat" padding="lg" style={styles.summaryCard}>
           <View style={styles.row}>
             <Text style={styles.label}>Total Fare</Text>
-            <Text style={styles.value}>₹150</Text>
+            <Text style={styles.value}>₹{activeRide?.price || 150}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Distance</Text>
@@ -38,15 +86,15 @@ const RideCompletedScreen = ({ navigation }: any) => {
           <StarRating rating={rating} onRatingChange={setRating} readonly={false} size={40} />
           <Input
             placeholder="Write a comment (optional)"
-            value=""
-            onChangeText={() => {}}
+            value={comment}
+            onChangeText={setComment}
             style={styles.commentInput}
           />
         </View>
 
         <Button
-          label="Done"
-          onPress={() => navigation.navigate('MainTabs')}
+          label="Pay Now"
+          onPress={handlePayment}
           fullWidth
           style={styles.doneBtn}
         />

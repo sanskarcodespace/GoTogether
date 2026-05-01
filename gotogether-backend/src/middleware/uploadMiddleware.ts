@@ -9,7 +9,7 @@ const storage = new CloudinaryStorage({
   params: {
     folder: 'gotogether/profiles',
     allowed_formats: ['jpg', 'jpeg', 'png'],
-    transformation: [{ width: 500, height: 500, crop: 'limit' }],
+    transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }],
   } as any,
 });
 

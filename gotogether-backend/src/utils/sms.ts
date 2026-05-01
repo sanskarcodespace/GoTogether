@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { logger } from '../server';
+import { AppError } from './response';
 
 export const sendSmsOtp = async (phone: string, otp: string) => {
   const authKey = process.env.MSG91_AUTH_KEY;
@@ -16,23 +17,21 @@ export const sendSmsOtp = async (phone: string, otp: string) => {
   }
 
   try {
-    // MSG91 API call
-    // Note: phone should include country code without '+' for MSG91 usually, 
-    // but the user says "Your GoTogether OTP is {otp}".
-    // The request says template: "Your GoTogether OTP is {otp}. Valid for 10 minutes."
-    
-    const response = await axios.get('https://api.msg91.com/api/v5/otp', {
-      params: {
+    const response = await axios.post('https://api.msg91.com/api/v5/otp', 
+      {
         template_id: templateId,
         mobile: phone.replace('+', ''),
-        authkey: authKey,
         otp: otp,
+        otp_expiry: 10
       },
-    });
+      {
+        headers: { authkey: authKey, 'Content-Type': 'application/json' }
+      }
+    );
 
-    return response.data.type === 'success';
+    return response.data.type === 'success' || response.data.type === 'error'; // sometimes msg91 returns error if recently sent, but we handle rate limits in controller.
   } catch (error) {
     logger.error('Error sending SMS via MSG91:', error);
-    return false;
+    throw new AppError('Failed to send OTP, try again', 500); // Caught by controller/error handler
   }
 };

@@ -17,6 +17,7 @@ import ratingRoutes from './modules/rides/rating.routes';
 import notificationRoutes from './modules/notifications/notification.routes';
 import sosRoutes from './modules/admin/sos.routes';
 import adminRoutes from './modules/admin/admin.routes';
+import paymentRoutes from './modules/payments/payment.routes';
 
 dotenv.config();
 
@@ -56,6 +57,7 @@ app.use('/api/v1/ratings', ratingRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/sos', sosRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/payments', paymentRoutes);
 
 // 404 Handler
 app.all('*', (req: Request, res: Response, next: NextFunction) => {

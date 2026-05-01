@@ -5,11 +5,15 @@ import { Colors } from '../constants/Colors';
 import { Spacing, BorderRadius } from '../constants/Spacing';
 import Input from './Input';
 
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+
+const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+
 interface RouteInputProps {
-  fromValue: string;
-  toValue: string;
-  onFromChange: (text: string) => void;
-  onToChange: (text: string) => void;
+  fromValue?: string;
+  toValue?: string;
+  onFromChange: (data: any, details: any) => void;
+  onToChange: (data: any, details: any) => void;
   onSwap?: () => void;
   onLocationPress?: (type: 'from' | 'to') => void;
 }
@@ -25,30 +29,31 @@ const RouteInput: React.FC<RouteInputProps> = ({
   return (
     <View style={styles.container}>
       <View style={styles.inputsWrapper}>
-        <Input
-          placeholder="Pickup location"
-          value={fromValue}
-          onChangeText={onFromChange}
-          leftIcon={<Ionicons name="radio-button-on" size={20} color={Colors.primary} />}
-          rightIcon={
-            onLocationPress && (
-              <TouchableOpacity onPress={() => onLocationPress('from')}>
-                <Ionicons name="locate" size={20} color={Colors.muted} />
-              </TouchableOpacity>
-            )
-          }
-          style={styles.input}
-        />
+        <View style={styles.autocompleteContainer}>
+          <Ionicons name="radio-button-on" size={20} color={Colors.primary} style={styles.icon} />
+          <GooglePlacesAutocomplete
+            placeholder="Pickup location"
+            onPress={(data, details = null) => onFromChange(data, details)}
+            query={{ key: GOOGLE_PLACES_API_KEY, language: 'en', components: 'country:in' }}
+            fetchDetails={true}
+            textInputProps={{ value: fromValue }}
+            styles={autocompleteStyles}
+          />
+        </View>
         <View style={styles.connector}>
           <View style={styles.line} />
         </View>
-        <Input
-          placeholder="Where to?"
-          value={toValue}
-          onChangeText={onToChange}
-          leftIcon={<Ionicons name="location" size={20} color={Colors.secondary} />}
-          style={styles.input}
-        />
+        <View style={styles.autocompleteContainer}>
+          <Ionicons name="location" size={20} color={Colors.secondary} style={styles.icon} />
+          <GooglePlacesAutocomplete
+            placeholder="Where to?"
+            onPress={(data, details = null) => onToChange(data, details)}
+            query={{ key: GOOGLE_PLACES_API_KEY, language: 'en', components: 'country:in' }}
+            fetchDetails={true}
+            textInputProps={{ value: toValue }}
+            styles={autocompleteStyles}
+          />
+        </View>
       </View>
       {onSwap && (
         <TouchableOpacity style={styles.swapButton} onPress={onSwap}>
@@ -90,7 +95,47 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
     borderRadius: BorderRadius.full,
   },
+  autocompleteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.background,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.sm,
+    height: 50,
+    zIndex: 1,
+  },
+  icon: {
+    marginRight: Spacing.sm,
+  },
 });
+
+const autocompleteStyles = {
+  container: {
+    flex: 1,
+  },
+  textInputContainer: {
+    backgroundColor: 'transparent',
+    borderTopWidth: 0,
+    borderBottomWidth: 0,
+  },
+  textInput: {
+    backgroundColor: 'transparent',
+    height: 38,
+    color: Colors.text,
+    fontSize: 16,
+    paddingHorizontal: 0,
+    marginBottom: 0,
+  },
+  listView: {
+    position: 'absolute',
+    top: 50,
+    backgroundColor: Colors.white,
+    borderRadius: BorderRadius.md,
+    ...Shadows.card,
+    elevation: 3,
+    zIndex: 1000,
+  },
+};
 
 // Need to import Shadows but it's in Layout.ts, I'll add it to styles
 import { Shadows } from '../constants/Layout';

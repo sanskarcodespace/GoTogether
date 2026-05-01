@@ -3,13 +3,14 @@ import { AppError } from './response';
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
-export const getDirections = async (origin: [number, number], destination: [number, number]) => {
+export const getRoute = async (origin: [number, number], destination: [number, number]) => {
   try {
     const response = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
       params: {
-        origin: `${origin[1]},${origin[0]}`, // lat,lng
-        destination: `${destination[1]},${destination[0]}`,
+        origin: `${origin[0]},${origin[1]}`, // lat,lng
+        destination: `${destination[0]},${destination[1]}`, // lat,lng
         key: GOOGLE_MAPS_API_KEY,
+        mode: 'driving',
       },
     });
 
@@ -21,16 +22,16 @@ export const getDirections = async (origin: [number, number], destination: [numb
     const leg = route.legs[0];
 
     return {
-      encodedPolyline: route.overview_polyline.points,
-      distanceKm: leg.distance.value / 1000,
-      durationMinutes: Math.round(leg.duration.value / 60),
+      distance: leg.distance.value, // meters
+      duration: leg.duration.value, // seconds
+      polyline: route.overview_polyline.points, // encoded polyline
     };
   } catch (error: any) {
     throw new AppError(error.message, 500);
   }
 };
 
-export const getDistanceMatrix = async (origins: string[], destinations: string[]) => {
+export const getDistance = async (origins: string[], destinations: string[]) => {
   try {
     const response = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
       params: {
@@ -44,8 +45,32 @@ export const getDistanceMatrix = async (origins: string[], destinations: string[
       throw new Error(response.data.error_message || 'Distance Matrix API error');
     }
 
-    return response.data.rows[0].elements[0];
+    return response.data; // Returns matrix
   } catch (error: any) {
     throw new AppError(error.message, 500);
   }
 };
+
+export const geocodeAddress = async (address: string) => {
+  try {
+    const response = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
+      params: {
+        address,
+        key: GOOGLE_MAPS_API_KEY,
+      },
+    });
+
+    if (response.data.status !== 'OK') {
+      throw new Error(response.data.error_message || 'Geocoding API error');
+    }
+
+    const location = response.data.results[0].geometry.location;
+    return {
+      lat: location.lat,
+      lng: location.lng,
+    };
+  } catch (error: any) {
+    throw new AppError(error.message, 500);
+  }
+};
+
