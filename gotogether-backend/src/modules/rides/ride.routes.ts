@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as rideController from './ride.controller';
-import { createRideSchema, searchRideSchema } from './ride.validator';
+import { createRideSchema, searchRideSchema, createRequestSchema } from './ride.validator';
 import { validate } from '../../middleware/validateMiddleware';
 import { protect, restrictTo } from '../../middleware/authMiddleware';
 
@@ -23,7 +23,7 @@ router.put('/:rideId/complete', rideController.completeRide);
 router.put('/:rideId/cancel', rideController.cancelRide);
 
 // Ride Requests
-router.post('/:rideId/requests', rideController.requestRide);
+router.post('/:rideId/requests', validate(createRequestSchema), rideController.requestRide);
 router.put('/:rideId/requests/:requestId/accept', rideController.acceptRequest);
 router.put('/:rideId/requests/:requestId/reject', rideController.rejectRequest);
 router.post('/requests/:requestId/verify-otp', rideController.verifyPassengerOTP);

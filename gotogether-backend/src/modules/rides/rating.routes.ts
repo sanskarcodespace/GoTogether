@@ -15,10 +15,29 @@ router.post('/:rideId/rate', asyncHandler(async (req: Request, res: Response, ne
   const rideId = req.params.rideId;
 
   const existing = await Rating.findOne({ ride: rideId, rater: req.user.id, rated: ratedUserId });
-  if (existing) return next(new AppError('Already rated', 400));
+  if (existing) return next(AppError.conflict('Already rated'));
+
+  if (req.user.id === ratedUserId) {
+    return next(AppError.badRequest('You cannot rate yourself'));
+  }
 
   const ride = await Ride.findById(rideId);
-  if (!ride) return next(new AppError('Ride not found', 404));
+  if (!ride) return next(AppError.notFound('Ride'));
+
+  const userToRate = await User.findById(ratedUserId);
+  if (!userToRate) return next(AppError.notFound('User'));
+
+  // 24h window check
+  if (ride.status !== 'completed' && ride.status !== 'cancelled') {
+    return next(AppError.badRequest('Ride is not completed yet'));
+  }
+  
+  const completionTime = ride.completedAt || ride.cancelledAt || ride.updatedAt;
+  const hoursSinceCompletion = (Date.now() - new Date(completionTime).getTime()) / (1000 * 60 * 60);
+  
+  if (hoursSinceCompletion > 24) {
+    return next(AppError.badRequest('Rating window expired. You can only rate within 24 hours of ride completion.'));
+  }
 
   const isProvider = ride.provider.toString() === ratedUserId;
   const roleType = isProvider ? 'asProvider' : 'asSeeker';

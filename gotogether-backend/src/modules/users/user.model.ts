@@ -3,6 +3,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IUser extends Document {
   phone: string;
   email?: string;
+  password?: string;
   name?: string;
   profilePhoto?: string;
   gender?: 'male' | 'female' | 'other' | 'prefer_not_to_say';
@@ -42,6 +43,7 @@ const userSchema: Schema = new Schema(
   {
     phone: { type: String, unique: true, required: true, index: true, trim: true },
     email: { type: String, sparse: true, trim: true, lowercase: true },
+    password: { type: String, select: false },
     name: { type: String, trim: true },
     profilePhoto: { type: String },
     gender: {

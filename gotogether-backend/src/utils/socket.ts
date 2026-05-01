@@ -23,10 +23,19 @@ const makeAuthMiddleware = () => async (socket: Socket, next: (err?: Error) => v
 const socketKey  = (userId: string) => `socket:${userId}`;
 const SOCKET_TTL = 60 * 60 * 24; // 24 h
 
+let ioInstance: SocketIOServer | null = null;
+
+export const getIO = () => {
+  if (!ioInstance) throw new Error('Socket.io not initialized!');
+  return ioInstance;
+};
+
 export const initSocket = (server: HTTPServer) => {
   const io = new SocketIOServer(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
   });
+  
+  ioInstance = io;
 
   // ── Namespaces ─────────────────────────────────────────────────────────────
   const ridesNsp    = io.of('/rides');

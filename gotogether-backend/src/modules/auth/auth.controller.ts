@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { asyncHandler, formatResponse, AppError } from '../../utils/response';
 import User from '../users/user.model';
 import redisClient from '../../config/redis';
@@ -60,7 +61,7 @@ export const verifyOTP = asyncHandler(async (req: Request, res: Response, next: 
   // 1. Brute force check
   const attemptsKey = `otp_attempts:${phone}`;
   const attempts = await redisClient.get(attemptsKey);
-  if (attempts && parseInt(attempts) >= 5) {
+  if (attempts && parseInt(attempts) >= 3) {
     await redisClient.setEx(`otp_blocked:${phone}`, 900, 'true'); // 15 min block
     await redisClient.del(attemptsKey);
     return next(new AppError('Too many failed attempts. Phone blocked for 15 minutes.', 429));
@@ -204,5 +205,41 @@ export const logout = asyncHandler(async (req: Request, res: Response, next: Nex
   }
 
   return formatResponse(res, 200, 'Logged out successfully');
+});
+
+/**
+ * Step 6: Admin Login
+ */
+export const adminLogin = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const { email, password } = req.body;
+  if (!email || !password) return next(new AppError('Please provide email and password', 400));
+
+  const user = await User.findOne({ email }).select('+password');
+  if (!user || user.role !== 'admin' || !user.password) {
+    return next(new AppError('Invalid email or password', 401));
+  }
+
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) return next(new AppError('Invalid email or password', 401));
+
+  const { accessToken, refreshToken } = generateTokens(user.id, user.role, user.phone);
+
+  user.refreshTokens.push(refreshToken);
+  user.lastActive = new Date();
+  await user.save();
+
+  await redisClient.sAdd(`active_sessions:${user.id}`, refreshToken);
+  await redisClient.expire(`active_sessions:${user.id}`, 7 * 24 * 60 * 60);
+
+  return formatResponse(res, 200, 'Admin logged in successfully', {
+    accessToken,
+    refreshToken,
+    user: {
+      _id: user._id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    },
+  });
 });
 

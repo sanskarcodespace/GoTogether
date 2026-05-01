@@ -4,6 +4,8 @@ import { asyncHandler, formatResponse, AppError } from '../../utils/response';
 import Ride from './ride.model';
 import RideRequest from './rideRequest.model';
 import { getDistance } from '../../utils/googleMaps';
+import { getIO } from '../../utils/socket';
+import redisClient from '../../config/redis';
 
 export const getSuggestedPrice = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { startLat, startLng, endLat, endLng, type } = req.query;
@@ -49,10 +51,20 @@ export const createRide = asyncHandler(async (req: Request, res: Response, next:
   const activeRide = await Ride.findOne({ provider: req.user.id, status: { $in: ['active', 'in_progress'] } });
   if (activeRide) return next(new AppError('You already have an active ride', 409));
 
+  // Check if locations are within India (approximate bounding box)
+  const inIndia = (lat: number, lng: number) => lat >= 8 && lat <= 38 && lng >= 68 && lng <= 98;
+  const { startLocation, endLocation } = req.body;
+  if (
+    !inIndia(startLocation.coordinates[0], startLocation.coordinates[1]) ||
+    !inIndia(endLocation.coordinates[0], endLocation.coordinates[1])
+  ) {
+    return next(new AppError('Location outside service area', 400));
+  }
+
   const ride = await rideService.createNewRide(req.user.id, req.body);
 
   // Broadcast to all seekers
-  io.of('/rides').emit('new_ride_available', ride);
+  getIO().of('/rides').emit('new_ride_available', ride);
 
   return formatResponse(res, 201, 'Ride created successfully', ride);
 });
@@ -155,11 +167,22 @@ export const cancelRide = asyncHandler(async (req: Request, res: Response, next:
 // Requests Logic
 export const requestRide = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const rideId = req.params.rideId;
-  const existingRequest = await RideRequest.findOne({ ride: rideId, seeker: req.user.id });
+  const existingRequest = await RideRequest.findOne({ ride: rideId, seeker: req.user.id, status: { $in: ['pending', 'accepted'] } });
   if (existingRequest) return next(new AppError('Request already sent', 409));
+
+  const seekerActiveRide = await Ride.findOne({ 'passengers.seeker': req.user.id, status: { $in: ['active', 'in_progress'] } });
+  if (seekerActiveRide) return next(new AppError('You already have an active ride', 409));
 
   const ride = await Ride.findById(rideId).populate('provider', 'name');
   if (!ride || ride.status !== 'active') return next(new AppError('Ride not available', 404));
+
+  if (ride.provider._id.toString() === req.user.id) {
+    return next(new AppError('You cannot request your own ride', 400));
+  }
+
+  if (ride.seats.available <= 0) {
+    return next(new AppError('Ride is full', 409));
+  }
 
   const request = await RideRequest.create({
     ride: rideId,
@@ -169,11 +192,9 @@ export const requestRide = asyncHandler(async (req: Request, res: Response, next
   });
 
   // Notify provider via socket (server-side relay)
-  const { getRedisClient } = await import('../../../config/redis');
-  const redis = getRedisClient();
-  const providerSid = await redis.get(`socket:${(ride.provider as any)._id}`);
+  const providerSid = await redisClient.get(`socket:${(ride.provider as any)._id}`);
   if (providerSid) {
-    io.of('/rides').to(providerSid).emit('ride:new_request', {
+    getIO().of('/rides').to(providerSid).emit('ride:new_request', {
       rideId,
       requestId: String(request._id),
       seeker: {
@@ -201,11 +222,9 @@ export const acceptRequest = asyncHandler(async (req: Request, res: Response, ne
   if (!request) return next(new AppError('Request not found or not pending', 404));
 
   // Notify seeker via socket (server-side relay)
-  const { getRedisClient } = await import('../../../config/redis');
-  const redis = getRedisClient();
-  const seekerSid = await redis.get(`socket:${request.seeker}`);
+  const seekerSid = await redisClient.get(`socket:${request.seeker}`);
   if (seekerSid) {
-    io.of('/rides').to(seekerSid).emit('ride:accepted', {
+    getIO().of('/rides').to(seekerSid).emit('ride:accepted', {
       rideId,
       requestId,
       seekerId: String(request.seeker),
@@ -230,11 +249,9 @@ export const rejectRequest = asyncHandler(async (req: Request, res: Response, ne
   if (!request) return next(new AppError('Request not found or not pending', 404));
 
   // Notify seeker via socket (server-side relay)
-  const { getRedisClient } = await import('../../../config/redis');
-  const redis = getRedisClient();
-  const seekerSid = await redis.get(`socket:${request.seeker}`);
+  const seekerSid = await redisClient.get(`socket:${request.seeker}`);
   if (seekerSid) {
-    io.of('/rides').to(seekerSid).emit('ride:rejected', {
+    getIO().of('/rides').to(seekerSid).emit('ride:rejected', {
       rideId,
       requestId,
       reason,
@@ -249,7 +266,30 @@ export const verifyPassengerOTP = asyncHandler(async (req: Request, res: Respons
   const { otp } = req.body;
   
   const request = await RideRequest.findOne({ _id: requestId });
-  if (!request || request.otp.code !== otp) return next(new AppError('Invalid OTP', 400));
+  if (!request) return next(AppError.notFound('Ride request'));
+
+  if (request.otp.verified) {
+    return next(AppError.conflict('Passenger already verified'));
+  }
+
+  const ride = await Ride.findById(request.ride);
+  if (!ride || ride.status === 'cancelled' || ride.status === 'completed') {
+    return next(AppError.badRequest('Ride is no longer active'));
+  }
+
+  const attemptsKey = `passenger_otp_attempts:${requestId}`;
+  const attempts = await redisClient.get(attemptsKey);
+  if (attempts && parseInt(attempts) >= 3) {
+    return next(AppError.tooManyRequests('Too many failed attempts. Please contact support.'));
+  }
+
+  if (request.otp.code !== otp) {
+    await redisClient.incr(attemptsKey);
+    await redisClient.expire(attemptsKey, 900); // 15 mins block
+    return next(AppError.badRequest('Invalid OTP'));
+  }
+
+  await redisClient.del(attemptsKey);
 
   request.otp.verified = true;
   await request.save();

@@ -13,6 +13,28 @@ export class AppError extends Error {
 
     Error.captureStackTrace(this, this.constructor);
   }
+
+  static notFound(resource: string) {
+    return new AppError(`${resource} not found`, 404);
+  }
+  static unauthorized(msg = 'Unauthorized') {
+    return new AppError(msg, 401);
+  }
+  static forbidden(msg = 'Forbidden') {
+    return new AppError(msg, 403);
+  }
+  static badRequest(msg: string, errors?: any[]) {
+    return new AppError(msg, 400, errors);
+  }
+  static conflict(msg: string) {
+    return new AppError(msg, 409);
+  }
+  static tooManyRequests(msg = 'Too many requests') {
+    return new AppError(msg, 429);
+  }
+  static internal(msg = 'Internal server error') {
+    return new AppError(msg, 500);
+  }
 }
 
 export const asyncHandler = (fn: Function) => {

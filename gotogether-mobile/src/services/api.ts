@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { useAuthStore } from '../store/authStore';
+import { showToast } from '../utils/toast';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:5000/api/v1';
 
@@ -66,6 +67,25 @@ api.interceptors.response.use(
         return Promise.reject(refreshError);
       }
     }
+
+    // Handle other errors globally with toasts
+    if (!error.response) {
+      showToast('No internet connection or server is unreachable', 'error');
+    } else {
+      const status = error.response.status;
+      const message = error.response.data?.message || 'An error occurred';
+
+      if (status === 403) {
+        showToast(message || 'You do not have permission to perform this action', 'warning');
+      } else if (status === 409) {
+        showToast(message || 'Conflict: Already exists or active', 'error');
+      } else if (status === 429) {
+        showToast(message || 'Too many attempts. Please wait before trying again.', 'warning');
+      } else if (status >= 500) {
+        showToast('Something went wrong on our end. Please try again later.', 'error');
+      }
+    }
+
     return Promise.reject(error);
   }
 );
