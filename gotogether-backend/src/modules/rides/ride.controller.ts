@@ -44,8 +44,6 @@ export const getSuggestedPrice = asyncHandler(async (req: Request, res: Response
   return formatResponse(res, 200, 'Suggested price calculated', result);
 });
 
-import { io } from '../../server';
-
 export const createRide = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   if (!req.user.vehicle?.plateNumber) {
     return next(new AppError('Please set up your vehicle details first', 403));

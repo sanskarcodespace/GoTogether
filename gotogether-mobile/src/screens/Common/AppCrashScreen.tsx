@@ -1,9 +1,9 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Button } from '../components/Button';
-import { Colors } from '../constants/Colors';
-import { Typography } from '../constants/Typography';
-import { Spacing } from '../constants/Spacing';
+import Button from '../../components/Button';
+import { Colors } from '../../constants/Colors';
+import { Typography } from '../../constants/Typography';
+import { Spacing } from '../../constants/Spacing';
 
 export default function AppCrashScreen() {
   // If we had a reset function passed down, we could call it here.

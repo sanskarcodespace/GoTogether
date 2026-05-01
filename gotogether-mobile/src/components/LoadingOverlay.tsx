@@ -6,7 +6,7 @@ interface LoadingOverlayProps {
   message?: string;
 }
 
-export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({ visible, message }) => {
+const LoadingOverlay: React.FC<LoadingOverlayProps> = ({ visible, message }) => {
   return (
     <Modal transparent visible={visible} animationType="fade">
       <View style={styles.container}>
@@ -40,3 +40,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 });
+
+export default LoadingOverlay;

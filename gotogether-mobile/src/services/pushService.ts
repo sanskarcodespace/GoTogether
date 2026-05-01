@@ -9,6 +9,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -65,15 +67,15 @@ export const pushService = {
       const { data } = response.notification.request.content;
       console.log('Notification Tapped:', data);
       
-      if (data.type === 'RIDE_REQUEST') {
+      if (data?.type === 'RIDE_REQUEST') {
         navigation.navigate('ActiveRide');
       }
-      // Add more navigation logic based on data.type
+      // Add more navigation logic based on data?.type
     });
 
     return () => {
-      Notifications.removeNotificationSubscription(notificationListener);
-      Notifications.removeNotificationSubscription(responseListener);
+      notificationListener.remove();
+      responseListener.remove();
     };
   },
 };

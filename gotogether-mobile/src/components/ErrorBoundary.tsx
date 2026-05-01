@@ -1,6 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Button } from './Button';
+import Button from './Button';
 import { Colors } from '../constants/Colors';
 import { Typography } from '../constants/Typography';
 import { Spacing } from '../constants/Spacing';
@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: Typography.family.display,
     fontSize: Typography.size.xl,
-    color: Colors.error,
+    color: Colors.danger,
     fontWeight: 'bold',
     marginBottom: Spacing.md,
   },
