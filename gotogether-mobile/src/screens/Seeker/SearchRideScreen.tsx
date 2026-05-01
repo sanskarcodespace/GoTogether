@@ -1,49 +1,58 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, FlatList } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, ScrollView, RefreshControl } from 'react-native';
+import * as Location from 'expo-location';
 import { Colors } from '../../constants/Colors';
 import { Typography } from '../../constants/Typography';
 import { Spacing } from '../../constants/Spacing';
-import { Button, RouteInput, RideCard, SafeScreen, Chip, EmptyState } from '../../components';
-
-const DUMMY_RIDES = [
-  {
-    id: '1',
-    provider: { name: 'Rahul Sharma', rating: 4.5, avatar: '' },
-    from: 'Connaught Place',
-    to: 'Gurgaon Cyber City',
-    price: 150,
-    eta: '10 mins',
-    seats: 2,
-    vehicleType: 'car' as const,
-  },
-  {
-    id: '2',
-    provider: { name: 'Amit Kumar', rating: 4.8, avatar: '' },
-    from: 'Hauz Khas',
-    to: 'Noida Sector 62',
-    price: 80,
-    eta: '5 mins',
-    seats: 1,
-    vehicleType: 'bike' as const,
-  },
-];
+import { Button, RouteInput, RideCard, SafeScreen, Chip, EmptyState, LoadingOverlay } from '../../components';
+import { rideService } from '../../services/rideService';
+import { useRideStore } from '../../store/rideStore';
+import { useLocationStore } from '../../store/locationStore';
+import { useApi } from '../../hooks/useApi';
 
 const SearchRideScreen = ({ navigation }: any) => {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [filter, setFilter] = useState('all');
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState(DUMMY_RIDES);
+  
+  const { searchResults, setSearchResults } = useRideStore();
+  const { setLocation, setPermission } = useLocationStore();
+  const { isLoading, request: searchRides } = useApi(rideService.searchRides);
 
-  const handleSearch = () => {
-    setSearching(true);
-    setTimeout(() => {
-      setSearching(false);
-    }, 1000);
+  const fetchLocation = async () => {
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      setPermission(false);
+      return;
+    }
+    setPermission(true);
+    let location = await Location.getCurrentPositionAsync({});
+    setLocation({
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    });
   };
+
+  useEffect(() => {
+    fetchLocation();
+  }, []);
+
+  const handleSearch = useCallback(async () => {
+    try {
+      const results = await searchRides({
+        from,
+        to,
+        type: filter === 'all' ? undefined : filter,
+      });
+      setSearchResults(results);
+    } catch (err) {
+      // Handled by useApi
+    }
+  }, [from, to, filter, searchRides, setSearchResults]);
 
   return (
     <SafeScreen style={styles.container}>
+      <LoadingOverlay visible={isLoading} />
       <View style={styles.header}>
         <Text style={styles.title}>Find a Ride</Text>
         <RouteInput
@@ -52,7 +61,7 @@ const SearchRideScreen = ({ navigation }: any) => {
           onFromChange={setFrom}
           onToChange={setTo}
         />
-        <Button label="Search" onPress={handleSearch} style={styles.searchBtn} loading={searching} />
+        <Button label="Search" onPress={handleSearch} style={styles.searchBtn} />
       </View>
 
       <View style={styles.filters}>
@@ -60,17 +69,19 @@ const SearchRideScreen = ({ navigation }: any) => {
           <Chip label="All" selected={filter === 'all'} onPress={() => setFilter('all')} />
           <Chip label="Car" selected={filter === 'car'} onPress={() => setFilter('car')} />
           <Chip label="Bike" selected={filter === 'bike'} onPress={() => setFilter('bike')} />
-          <Chip label="Near Me" selected={filter === 'near'} onPress={() => setFilter('near')} />
         </ScrollView>
       </View>
 
       <FlatList
-        data={results}
-        keyExtractor={(item) => item.id}
+        data={searchResults}
+        keyExtractor={(item) => item._id || item.id}
+        refreshControl={
+          <RefreshControl refreshing={isLoading} onRefresh={handleSearch} />
+        }
         renderItem={({ item }) => (
           <RideCard
             ride={item}
-            onPress={() => navigation.navigate('RideDetail', { rideId: item.id })}
+            onPress={() => navigation.navigate('RideDetail', { rideId: item._id || item.id })}
           />
         )}
         ListEmptyComponent={
@@ -86,39 +97,3 @@ const SearchRideScreen = ({ navigation }: any) => {
   );
 };
 
-import { ScrollView } from 'react-native';
-
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: Colors.background,
-  },
-  header: {
-    padding: Spacing.md,
-    backgroundColor: Colors.white,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    elevation: 4,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-  },
-  title: {
-    fontFamily: Typography.family.display,
-    fontSize: Typography.size.xl,
-    color: Colors.dark,
-    fontWeight: 'bold',
-    marginBottom: Spacing.md,
-  },
-  searchBtn: {
-    marginTop: Spacing.md,
-  },
-  filters: {
-    padding: Spacing.md,
-  },
-  list: {
-    paddingBottom: 100,
-  },
-});
-
-export default SearchRideScreen;

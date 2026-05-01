@@ -4,7 +4,7 @@ import { AppError, asyncHandler } from '../utils/response';
 import User from '../modules/users/user.model';
 
 interface JWTPayload {
-  id: string;
+  userId: string;
   role: string;
   phone: string;
 }
@@ -28,12 +28,33 @@ export const protect = asyncHandler(async (req: Request, res: Response, next: Ne
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET as string) as JWTPayload;
+    // JWT secret rotation: support multiple valid secrets (comma-separated in env)
+    const secrets = (process.env.JWT_ACCESS_SECRET || '').split(',');
+    let decoded: JWTPayload | null = null;
+    let lastError: any = null;
+
+    for (const secret of secrets) {
+      try {
+        decoded = jwt.verify(token, secret.trim()) as JWTPayload;
+        if (decoded) break;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (!decoded) {
+      throw lastError || new Error('Invalid token');
+    }
     
     // Check if user still exists
-    const currentUser = await User.findById(decoded.id);
+    const currentUser = await User.findById(decoded.userId);
     if (!currentUser) {
       return next(new AppError('The user belonging to this token no longer exists.', 401));
+    }
+
+    // Check if user is banned
+    if (currentUser.isBanned) {
+      return next(new AppError('Your account has been banned. Please contact support.', 403));
     }
 
     // Grant access to protected route
@@ -43,6 +64,8 @@ export const protect = asyncHandler(async (req: Request, res: Response, next: Ne
     return next(new AppError('Invalid token or token expired.', 401));
   }
 });
+
+
 
 export const restrictTo = (...roles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {

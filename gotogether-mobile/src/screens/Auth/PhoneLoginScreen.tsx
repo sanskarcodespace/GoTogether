@@ -1,56 +1,59 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { Typography } from '../../constants/Typography';
 import { Spacing } from '../../constants/Spacing';
-import { Button, Input, KeyboardScreen } from '../../components';
+import { Button, Input, SafeScreen, LoadingOverlay } from '../../components';
+import { authService } from '../../services/authService';
+import { useApi } from '../../hooks/useApi';
 
 const PhoneLoginScreen = ({ navigation }: any) => {
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [phone, setPhone] = useState('');
+  const { isLoading, request: sendOTP } = useApi(authService.sendOTP);
 
   const handleSendOTP = async () => {
-    if (phoneNumber.length < 10) return;
-    
-    setLoading(true);
-    // Simulate API call
-    setTimeout(() => {
-      setLoading(false);
-      navigation.navigate('OTPVerify', { phoneNumber });
-    }, 1500);
+    if (phone.length < 10) return;
+    try {
+      // Logic from prompt: send phone number, handle result
+      await sendOTP(phone.startsWith('+91') ? phone : `+91${phone}`);
+      navigation.navigate('OTPVerify', { phone: phone.startsWith('+91') ? phone : `+91${phone}` });
+    } catch (err) {
+      // Error handled by useApi
+    }
   };
 
   return (
-    <KeyboardScreen style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Enter your phone number</Text>
-        <Text style={styles.subtitle}>
-          We will send you a 6-digit verification code to this number.
-        </Text>
+    <SafeScreen style={styles.container}>
+      <LoadingOverlay visible={isLoading} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.content}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View style={styles.inner}>
+            <Text style={styles.title}>Welcome back!</Text>
+            <Text style={styles.subtitle}>Enter your phone number to continue</Text>
 
-        <View style={styles.inputWrapper}>
-          <View style={styles.countryCode}>
-            <Text style={styles.countryCodeText}>+91</Text>
+            <Input
+              label="Phone Number"
+              placeholder="9876543210"
+              keyboardType="phone-pad"
+              value={phone}
+              onChangeText={setPhone}
+              prefix="+91"
+              maxLength={10}
+            />
+
+            <Button
+              label="Send OTP"
+              onPress={handleSendOTP}
+              style={styles.button}
+              disabled={phone.length < 10}
+            />
           </View>
-          <Input
-            placeholder="98765 43210"
-            value={phoneNumber}
-            onChangeText={setPhoneNumber}
-            keyboardType="phone-pad"
-            style={styles.input}
-          />
-        </View>
-
-        <Button
-          label="Send OTP"
-          onPress={handleSendOTP}
-          loading={loading}
-          disabled={phoneNumber.length < 10}
-          fullWidth
-          style={styles.button}
-        />
-      </View>
-    </KeyboardScreen>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
+    </SafeScreen>
   );
 };
 

@@ -1,54 +1,38 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { Typography } from '../../constants/Typography';
 import { Spacing } from '../../constants/Spacing';
-import { Button, OTPInput, KeyboardScreen } from '../../components';
+import { Button, Input, SafeScreen, LoadingOverlay } from '../../components';
+import { authService } from '../../services/authService';
 import { useAuthStore } from '../../store/authStore';
+import { useApi } from '../../hooks/useApi';
 
 const OTPVerifyScreen = ({ route, navigation }: any) => {
-  const { phoneNumber } = route.params;
+  const { phone } = route.params;
   const [otp, setOtp] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [timer, setTimer] = useState(60);
-  const { setAuth } = useAuthStore();
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTimer((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const setAuth = useAuthStore((state) => state.setAuth);
+  const { isLoading, request: verifyOTP } = useApi(authService.verifyOTP);
 
   const handleVerify = async () => {
     if (otp.length < 6) return;
-    
-    setLoading(true);
-    // Simulate API call
-    setTimeout(async () => {
-      setLoading(false);
-      // Dummy data
-      const user = {
-        id: '1',
-        phoneNumber,
-        role: 'seeker' as const,
-      };
-      await setAuth(user, 'dummy-access-token', 'dummy-refresh-token');
-      navigation.navigate('ProfileSetup');
-    }, 1500);
+    try {
+      const data = await verifyOTP(phone, otp);
+      const { user, accessToken, refreshToken, isProfileComplete } = data;
+      
+      await setAuth(user, accessToken, refreshToken);
+
+      if (!isProfileComplete) {
+        navigation.navigate('ProfileSetup');
+      } else {
+        // App Navigator will pick up isAuthenticated change and navigate to Home
+      }
+    } catch (err) {
+      // Error handled by useApi
+    }
   };
 
   return (
-    <KeyboardScreen style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Verify your number</Text>
-        <Text style={styles.subtitle}>
-          Enter the 6-digit code sent to +91 {phoneNumber}
-        </Text>
-
-        <OTPInput length={6} onComplete={setOtp} />
-
-        <View style={styles.resendContainer}>
           {timer > 0 ? (
             <Text style={styles.timerText}>Resend code in {timer}s</Text>
           ) : (
