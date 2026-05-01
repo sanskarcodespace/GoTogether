@@ -1,28 +1,57 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet, Alert, TouchableOpacity } from 'react-native';
 import RazorpayCheckout from 'react-native-razorpay';
 import { Colors } from '../../constants/Colors';
 import { Typography } from '../../constants/Typography';
-import { Spacing } from '../../constants/Spacing';
+import { Spacing, BorderRadius } from '../../constants/Spacing';
 import { Button, SafeScreen, Card, StarRating, Input, LoadingOverlay } from '../../components';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../store/authStore';
 import { useRideStore } from '../../store/rideStore';
 import { paymentService } from '../../services/paymentService';
 import { useApi } from '../../hooks/useApi';
+import api from '../../services/api';
+
+const RATING_TAGS = ['Punctual', 'Safe Driving', 'Friendly', 'Clean Vehicle'];
 
 const RideCompletedScreen = ({ navigation, route }: any) => {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const { user } = useAuthStore();
   const { activeRide } = useRideStore();
   
   const { isLoading: isCreatingOrder, request: createOrder } = useApi(paymentService.createOrder);
   const { isLoading: isVerifying, request: verifyPayment } = useApi(paymentService.verifyPayment);
 
-  const handlePayment = async () => {
+  const toggleTag = (tag: string) => {
+    setSelectedTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
+  };
+
+  const handleRatingSubmit = async () => {
     try {
-      if (!activeRide) return;
+      if (rating > 0 && activeRide?._id) {
+         // Determine the rated user id: if current user is seeker, rate provider, else rate seeker.
+         const isProvider = activeRide.provider?._id === user?._id;
+         const ratedUserId = isProvider ? activeRide.passengers?.[0]?.seeker : activeRide.provider?._id;
+         
+         await api.post(`/rides/${activeRide._id}/rate`, {
+           ratedUserId,
+           score: rating,
+           comment,
+           tags: selectedTags
+         });
+      }
+    } catch (e) {
+      console.log('Rating submission failed', e);
+    }
+  };
+
+  const handlePayment = async () => {
+    await handleRatingSubmit();
+    
+    try {
+      if (!activeRide) return navigation.navigate('MainTabs');
 
       const amount = activeRide.price || 150;
       const order = await createOrder(amount * 100, activeRide._id);
@@ -52,8 +81,12 @@ const RideCompletedScreen = ({ navigation, route }: any) => {
       });
 
     } catch (err) {
-      // Error handled by useApi
+      navigation.navigate('MainTabs');
     }
+  };
+
+  const handleSkip = () => {
+     handlePayment();
   };
 
   return (
@@ -71,19 +104,24 @@ const RideCompletedScreen = ({ navigation, route }: any) => {
             <Text style={styles.label}>Total Fare</Text>
             <Text style={styles.value}>₹{activeRide?.price || 150}</Text>
           </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Distance</Text>
-            <Text style={styles.value}>12.5 km</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Duration</Text>
-            <Text style={styles.value}>25 mins</Text>
-          </View>
         </Card>
 
         <View style={styles.ratingSection}>
           <Text style={styles.ratingTitle}>Rate your experience</Text>
           <StarRating rating={rating} onRatingChange={setRating} readonly={false} size={40} />
+          
+          <View style={styles.tagsContainer}>
+             {RATING_TAGS.map(tag => (
+                <TouchableOpacity 
+                  key={tag} 
+                  style={[styles.tag, selectedTags.includes(tag) && styles.tagSelected]}
+                  onPress={() => toggleTag(tag)}
+                >
+                   <Text style={[styles.tagText, selectedTags.includes(tag) && styles.tagTextSelected]}>{tag}</Text>
+                </TouchableOpacity>
+             ))}
+          </View>
+
           <Input
             placeholder="Write a comment (optional)"
             value={comment}
@@ -92,12 +130,19 @@ const RideCompletedScreen = ({ navigation, route }: any) => {
           />
         </View>
 
-        <Button
-          label="Pay Now"
-          onPress={handlePayment}
-          fullWidth
-          style={styles.doneBtn}
-        />
+        <View style={styles.actionButtons}>
+          <Button
+            label="Skip"
+            onPress={handleSkip}
+            variant="ghost"
+            style={styles.skipBtn}
+          />
+          <Button
+            label={rating > 0 ? "Submit & Pay" : "Pay Now"}
+            onPress={handlePayment}
+            style={styles.doneBtn}
+          />
+        </View>
       </View>
     </SafeScreen>
   );
@@ -150,6 +195,7 @@ const styles = StyleSheet.create({
   ratingSection: {
     alignItems: 'center',
     width: '100%',
+    marginBottom: Spacing.xl,
   },
   ratingTitle: {
     fontFamily: Typography.family.display,
@@ -158,11 +204,47 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: Spacing.md,
   },
-  commentInput: {
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
     marginTop: Spacing.md,
   },
+  tag: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    margin: 4,
+  },
+  tagSelected: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  tagText: {
+    color: Colors.dark,
+    fontSize: Typography.size.sm,
+  },
+  tagTextSelected: {
+    color: Colors.white,
+  },
+  commentInput: {
+    marginTop: Spacing.md,
+    width: '100%',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginTop: Spacing.md,
+  },
+  skipBtn: {
+    flex: 1,
+    marginRight: Spacing.sm,
+  },
   doneBtn: {
-    marginTop: Spacing['2xl'],
+    flex: 2,
   },
 });
 

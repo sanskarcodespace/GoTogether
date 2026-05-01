@@ -1,9 +1,20 @@
 import api from './api';
 
 export const rideService = {
-  createRide: (data: any) => api.post('/rides/create', data),
+  createRide: async (data: any) => {
+    const response = await api.post('/rides/create', data);
+    return response.data.data;
+  },
   
-  searchRides: (params: any) => api.get('/rides/search', { params }),
+  getSuggestedPrice: async (params: any) => {
+    const response = await api.get('/rides/suggested-price', { params });
+    return response.data.data;
+  },
+  
+  searchRides: async (params: any) => {
+    const response = await api.get('/rides/search', { params });
+    return response.data.data;
+  },
   
   getActiveRide: () => api.get('/rides/active'),
   

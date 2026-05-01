@@ -10,8 +10,13 @@ router.use(protect);
 
 router.post('/create', restrictTo('user'), validate(createRideSchema), rideController.createRide);
 router.get('/search', validate(searchRideSchema), rideController.getAvailableRides);
+router.get('/suggested-price', rideController.getSuggestedPrice);
 router.get('/active', rideController.getActiveRide);
 router.get('/history', rideController.getRideHistory);
+router.post('/sos', rideController.sendSOS);
+
+// Live Status (public)
+router.get('/:rideId/live-status', rideController.getLiveStatus);
 router.get('/:rideId', rideController.getRideDetails);
 router.put('/:rideId/start', rideController.startRide);
 router.put('/:rideId/complete', rideController.completeRide);

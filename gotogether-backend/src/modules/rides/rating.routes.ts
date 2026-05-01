@@ -1,8 +1,10 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
 import { asyncHandler, formatResponse, AppError } from '../../utils/response';
 import { protect } from '../../middleware/authMiddleware';
 import Rating from './rating.model';
 import User from '../users/user.model';
+import Ride from './ride.model';
 
 const router = Router();
 
@@ -15,6 +17,12 @@ router.post('/:rideId/rate', asyncHandler(async (req: Request, res: Response, ne
   const existing = await Rating.findOne({ ride: rideId, rater: req.user.id, rated: ratedUserId });
   if (existing) return next(new AppError('Already rated', 400));
 
+  const ride = await Ride.findById(rideId);
+  if (!ride) return next(new AppError('Ride not found', 404));
+
+  const isProvider = ride.provider.toString() === ratedUserId;
+  const roleType = isProvider ? 'asProvider' : 'asSeeker';
+
   const rating = await Rating.create({
     ride: rideId,
     rater: req.user.id,
@@ -22,24 +30,22 @@ router.post('/:rideId/rate', asyncHandler(async (req: Request, res: Response, ne
     score,
     comment,
     tags,
-    raterRole: req.user.id === ratedUserId ? 'unknown' : 'seeker', // simplified
+    raterRole: isProvider ? 'seeker' : 'provider',
   });
 
-  // Update user average rating
-  const stats = await Rating.aggregate([
-    { $match: { rated: new mongoose.Types.ObjectId(ratedUserId) } },
-    { $group: { _id: null, avg: { $avg: '$score' }, count: { $sum: 1 } } }
-  ]);
+  const user = await User.findById(ratedUserId);
+  if (user) {
+    const oldAvg = user.rating?.[roleType]?.average || 0;
+    const oldCount = user.rating?.[roleType]?.count || 0;
+    const newAvg = (oldAvg * oldCount + score) / (oldCount + 1);
 
-  await User.findByIdAndUpdate(ratedUserId, {
-    'rating.asProvider.average': stats[0].avg,
-    'rating.asProvider.count': stats[0].count,
-  });
+    await User.findByIdAndUpdate(ratedUserId, {
+      [`rating.${roleType}.average`]: Math.round(newAvg * 10) / 10,
+      [`rating.${roleType}.count`]: oldCount + 1,
+    });
+  }
 
   return formatResponse(res, 201, 'Rating submitted', rating);
 }));
-
-import { Request, Response, NextFunction } from 'express';
-import mongoose from 'mongoose';
 
 export default router;

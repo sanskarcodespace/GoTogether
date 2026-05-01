@@ -3,6 +3,41 @@ import * as rideService from './ride.service';
 import { asyncHandler, formatResponse, AppError } from '../../utils/response';
 import Ride from './ride.model';
 import RideRequest from './rideRequest.model';
+import { getDistance } from '../../utils/googleMaps';
+
+export const getSuggestedPrice = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const { startLat, startLng, endLat, endLng, type } = req.query;
+  
+  if (!startLat || !startLng || !endLat || !endLng || !type) {
+    return next(new AppError('Missing parameters', 400));
+  }
+
+  const distanceMatrix = await getDistance([`${startLat},${startLng}`], [`${endLat},${endLng}`]);
+  if (!distanceMatrix || distanceMatrix.status !== 'OK') {
+    return next(new AppError('Could not calculate distance', 500));
+  }
+
+  const distanceKm = distanceMatrix.distance.value / 1000;
+  
+  // Basic pricing model:
+  // Car: base ₹50 + ₹10/km
+  // Bike: base ₹20 + ₹5/km
+  let suggestedPrice = 0;
+  if (type === 'car') {
+    suggestedPrice = 50 + (distanceKm * 10);
+  } else {
+    suggestedPrice = 20 + (distanceKm * 5);
+  }
+
+  // Round to nearest 5
+  suggestedPrice = Math.round(suggestedPrice / 5) * 5;
+
+  return formatResponse(res, 200, 'Suggested price calculated', {
+    suggestedPrice,
+    distanceKm: Math.round(distanceKm * 10) / 10,
+    durationMinutes: Math.round(distanceMatrix.duration.value / 60)
+  });
+});
 
 export const createRide = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   if (!req.user.vehicle?.plateNumber) {
@@ -36,6 +71,49 @@ export const getRideDetails = asyncHandler(async (req: Request, res: Response, n
     .populate('passengers.seeker', 'name profilePhoto rating');
   if (!ride) return next(new AppError('Ride not found', 404));
   return formatResponse(res, 200, 'Ride details fetched', ride);
+});
+
+import { db as firebaseDb } from '../../config/firebase';
+import { sendPushNotification } from '../notifications/notification.service';
+import { sendSMS } from '../../utils/sms';
+
+export const getLiveStatus = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const ride = await Ride.findById(req.params.rideId).populate('provider', 'name');
+  if (!ride) return next(new AppError('Ride not found', 404));
+
+  const providerSnapshot = await firebaseDb.ref(`active_rides/${ride._id}/provider_location`).once('value');
+  let providerLocation = null;
+  if (providerSnapshot.exists()) {
+    providerLocation = providerSnapshot.val();
+  }
+
+  return formatResponse(res, 200, 'Live status fetched', {
+    status: ride.status,
+    provider: { name: (ride.provider as any).name },
+    providerLocation,
+    // ETA could be calculated on client or we can fetch Distance Matrix here
+  });
+});
+
+export const sendSOS = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const { rideId, lat, lng } = req.body;
+  
+  // Create SOS event in DB (omitted complex schema, assume logged in a generic alerts collection or just logged)
+  console.log(`[SOS ALERT] User ${req.user.id} activated SOS at [${lat}, ${lng}] for ride ${rideId}`);
+
+  // Send FCM to all admin users (mock topic)
+  await sendPushNotification('admin_alerts', '🚨 SOS ALERT', `User ${req.user.name} requires emergency assistance!`, { type: 'SOS_ALERT', rideId, lat: String(lat), lng: String(lng) });
+
+  // Send SMS to user's emergency contact
+  if (req.user.emergencyContact?.phone) {
+    try {
+      await sendSMS(req.user.emergencyContact.phone, `EMERGENCY SOS: ${req.user.name} has activated SOS on GoTogether at https://maps.google.com/?q=${lat},${lng}. Please check on them immediately.`);
+    } catch (e) {
+      console.log('Failed to send SOS SMS');
+    }
+  }
+
+  return formatResponse(res, 200, 'SOS Sent — Help is coming');
 });
 
 export const startRide = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {

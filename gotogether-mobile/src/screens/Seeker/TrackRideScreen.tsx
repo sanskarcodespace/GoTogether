@@ -1,28 +1,57 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity } from 'react-native';
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from 'react-native-maps';
+import * as Location from 'expo-location';
 import { Colors } from '../../constants/Colors';
 import { Typography } from '../../constants/Typography';
 import { Spacing, BorderRadius } from '../../constants/Spacing';
 import { Button, Card, Avatar, SOSButton, MapPin } from '../../components';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocationStore } from '../../store/locationStore';
 import { useRideStore } from '../../store/rideStore';
+import { getDatabase, ref, onValue } from 'firebase/database';
+import { app } from '../../config/firebase'; // Assume exists
+import api from '../../services/api';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
+
+const STATUS_ICONS: any = {
+  accepted: 'checkmark-circle-outline',
+  en_route: 'car-outline',
+  arrived: 'location-outline',
+  in_progress: 'play-circle-outline',
+  completed: 'flag-outline',
+};
 
 const TrackRideScreen = ({ navigation, route }: any) => {
   const mapRef = useRef<MapView>(null);
-  const { providerLocation } = useLocationStore();
   const { activeRide } = useRideStore();
+  const [providerLocation, setProviderLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [eta, setEta] = useState<string>('Calculating...');
+  
+  // Status could be derived from activeRide.status or local calculation (e.g. distance < 200m)
+  const currentStatus = activeRide?.status || 'accepted';
 
+  // Real-time provider location from RTDB
+  useEffect(() => {
+    if (!activeRide?._id) return;
+    const db = getDatabase(app);
+    const locationRef = ref(db, `active_rides/${activeRide._id}/provider_location`);
+    
+    const unsubscribe = onValue(locationRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data && data.lat && data.lng) {
+        setProviderLocation({ latitude: data.lat, longitude: data.lng });
+      }
+    });
+
+    return () => unsubscribe();
+  }, [activeRide?._id]);
+
+  // Smooth camera pan when provider location changes
   useEffect(() => {
     if (providerLocation && mapRef.current) {
       mapRef.current.animateCamera({
-        center: {
-          latitude: providerLocation.latitude,
-          longitude: providerLocation.longitude,
-        },
+        center: providerLocation,
         pitch: 0,
         heading: 0,
         altitude: 1000,
@@ -30,6 +59,36 @@ const TrackRideScreen = ({ navigation, route }: any) => {
       });
     }
   }, [providerLocation]);
+
+  // ETA Calculation every 30s
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+
+    const fetchEta = async () => {
+      if (!providerLocation || !activeRide?.fromCoordinates) return;
+      try {
+        const response = await api.get('/rides/suggested-price', {
+          params: {
+            startLat: providerLocation.latitude,
+            startLng: providerLocation.longitude,
+            endLat: activeRide.fromCoordinates.latitude,
+            endLng: activeRide.fromCoordinates.longitude,
+            type: 'car'
+          }
+        });
+        if (response.data.data.durationMinutes) {
+          setEta(`${response.data.data.durationMinutes} mins`);
+        }
+      } catch (e) {
+        console.log('ETA fetch error', e);
+      }
+    };
+
+    fetchEta();
+    interval = setInterval(fetchEta, 30000);
+
+    return () => clearInterval(interval);
+  }, [providerLocation, activeRide?.fromCoordinates]);
 
   return (
     <View style={styles.container}>
@@ -58,8 +117,8 @@ const TrackRideScreen = ({ navigation, route }: any) => {
           </Marker>
         )}
         
-        {activeRide?.toCoordinates && (
-          <Marker coordinate={activeRide.toCoordinates} anchor={{ x: 0.5, y: 1 }}>
+        {activeRide?.fromCoordinates && (
+          <Marker coordinate={activeRide.fromCoordinates} anchor={{ x: 0.5, y: 1 }}>
             <MapPin type="destination" />
           </Marker>
         )}
@@ -72,19 +131,32 @@ const TrackRideScreen = ({ navigation, route }: any) => {
       </View>
 
       <View style={styles.sosContainer}>
-        <SOSButton onPress={() => {}} />
+        <SOSButton rideId={activeRide?._id} />
       </View>
 
       <View style={styles.bottomCard}>
         <Card variant="elevated" padding="lg">
+          <View style={styles.timelineRow}>
+             {Object.keys(STATUS_ICONS).map((status, index) => (
+                <View key={status} style={styles.timelineItem}>
+                  <Ionicons 
+                    name={STATUS_ICONS[status]} 
+                    size={20} 
+                    color={currentStatus === status || Object.keys(STATUS_ICONS).indexOf(currentStatus) > index ? Colors.secondary : Colors.muted} 
+                  />
+                  {index < Object.keys(STATUS_ICONS).length - 1 && <View style={styles.timelineLine} />}
+                </View>
+             ))}
+          </View>
+
           <View style={styles.etaRow}>
             <View>
               <Text style={styles.etaLabel}>Estimated Arrival</Text>
-              <Text style={styles.etaValue}>8 mins</Text>
+              <Text style={styles.etaValue}>{eta}</Text>
             </View>
             <View style={styles.otpContainer}>
               <Text style={styles.otpLabel}>Ride OTP</Text>
-              <Text style={styles.otpValue}>{activeRide?.otp || '----'}</Text>
+              <Text style={styles.otpValue}>{activeRide?.otp?.code || '----'}</Text>
             </View>
           </View>
 
@@ -94,19 +166,21 @@ const TrackRideScreen = ({ navigation, route }: any) => {
             <Avatar name={activeRide?.provider?.name || 'Provider'} size="md" />
             <View style={styles.providerInfo}>
               <Text style={styles.providerName}>{activeRide?.provider?.name}</Text>
-              <Text style={styles.vehicleInfo}>White Swift • DL 01 AB 1234</Text>
+              <Text style={styles.vehicleInfo}>{activeRide?.vehicle?.details || 'Vehicle'} • {activeRide?.vehicle?.plateNumber || 'DL 01'}</Text>
             </View>
             <TouchableOpacity style={styles.callBtn}>
               <Ionicons name="call" size={20} color={Colors.white} />
             </TouchableOpacity>
           </View>
 
-          <Button
-            label="Ride Completed"
-            onPress={() => navigation.navigate('RideCompleted', { rideId: activeRide?._id })}
-            fullWidth
-            style={styles.doneBtn}
-          />
+          {currentStatus === 'completed' && (
+            <Button
+              label="Ride Completed"
+              onPress={() => navigation.navigate('RideCompleted', { rideId: activeRide?._id })}
+              fullWidth
+              style={styles.doneBtn}
+            />
+          )}
         </Card>
       </View>
     </View>
@@ -206,6 +280,24 @@ const styles = StyleSheet.create({
   },
   doneBtn: {
     height: 50,
+  },
+  timelineRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+  },
+  timelineItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  timelineLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: Colors.border,
+    marginHorizontal: 5,
   },
 });
 
