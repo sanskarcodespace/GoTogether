@@ -17,6 +17,7 @@ import {
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from 'react-native-maps';
 import { ref, onValue, off } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { Colors }                 from '../../constants/Colors';
 import { Typography }             from '../../constants/Typography';
@@ -50,7 +51,16 @@ const TrackRideScreen = ({ navigation, route }: any) => {
 
   const [providerCoord, setProviderCoord] = useState<{ latitude: number; longitude: number } | null>(null);
   const [eta,           setEta]           = useState('Calculating…');
+  const [isMapVisible,  setIsMapVisible]  = useState(false); // only mount when focused
   const currentStatus                     = activeRide?.status ?? 'accepted';
+
+  // ── Guard: only render MapView when screen is focused ─────────────────────
+  useFocusEffect(
+    useCallback(() => {
+      setIsMapVisible(true);
+      return () => setIsMapVisible(false);
+    }, [])
+  );
 
   // ── Firebase RTDB subscription (primary GPS source) ───────────────────────
   useEffect(() => {
@@ -154,40 +164,37 @@ const TrackRideScreen = ({ navigation, route }: any) => {
   return (
     <View style={styles.container}>
       {/* ── Map ─────────────────────────────────────────────────────────── */}
-      <MapView
-        ref={mapRef}
-        provider={PROVIDER_GOOGLE}
-        style={styles.map}
-        initialRegion={{
-          latitude:  activeRide?.fromCoordinates?.latitude  ?? 28.6139,
-          longitude: activeRide?.fromCoordinates?.longitude ?? 77.209,
-          latitudeDelta:  0.05,
-          longitudeDelta: 0.02,
-        }}
-      >
-        {/* Route polyline */}
-        {activeRide?.routePolyline && (
-          <Polyline
-            coordinates={activeRide.routePolyline}
-            strokeWidth={4}
-            strokeColor={Colors.primary}
-          />
-        )}
-
-        {/* Provider marker */}
-        {providerCoord && (
-          <Marker coordinate={providerCoord} anchor={{ x: 0.5, y: 0.5 }}>
-            <MapPin type="provider" active />
-          </Marker>
-        )}
-
-        {/* Pickup marker */}
-        {activeRide?.fromCoordinates && (
-          <Marker coordinate={activeRide.fromCoordinates} anchor={{ x: 0.5, y: 1 }}>
-            <MapPin type="destination" />
-          </Marker>
-        )}
-      </MapView>
+      {isMapVisible && (
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          initialRegion={{
+            latitude:  activeRide?.fromCoordinates?.latitude  ?? 28.6139,
+            longitude: activeRide?.fromCoordinates?.longitude ?? 77.209,
+            latitudeDelta:  0.05,
+            longitudeDelta: 0.02,
+          }}
+        >
+          {activeRide?.routePolyline && (
+            <Polyline
+              coordinates={activeRide.routePolyline}
+              strokeWidth={4}
+              strokeColor={Colors.primary}
+            />
+          )}
+          {providerCoord && (
+            <Marker coordinate={providerCoord} anchor={{ x: 0.5, y: 0.5 }}>
+              <MapPin type="provider" active />
+            </Marker>
+          )}
+          {activeRide?.fromCoordinates && (
+            <Marker coordinate={activeRide.fromCoordinates} anchor={{ x: 0.5, y: 1 }}>
+              <MapPin type="destination" />
+            </Marker>
+          )}
+        </MapView>
+      )}
 
       {/* ── Back button ─────────────────────────────────────────────────── */}
       <View style={styles.header}>

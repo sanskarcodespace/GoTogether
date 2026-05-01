@@ -6,39 +6,42 @@ import RideRequest from './rideRequest.model';
 import { getDistance } from '../../utils/googleMaps';
 import { getIO } from '../../utils/socket';
 import redisClient from '../../config/redis';
+import { withCache, CacheKey, TTL, coordHash, invalidateCache } from '../../utils/cache';
 
 export const getSuggestedPrice = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-  const { startLat, startLng, endLat, endLng, type } = req.query;
-  
+  const { startLat, startLng, endLat, endLng, type } = req.query as Record<string, string>;
+
   if (!startLat || !startLng || !endLat || !endLng || !type) {
     return next(new AppError('Missing parameters', 400));
   }
 
-  const distanceMatrix = await getDistance([`${startLat},${startLng}`], [`${endLat},${endLng}`]);
-  if (!distanceMatrix || distanceMatrix.status !== 'OK') {
-    return next(new AppError('Could not calculate distance', 500));
-  }
+  const startHash = coordHash(startLat, startLng);
+  const endHash   = coordHash(endLat, endLng);
+  const cacheKey  = CacheKey.suggestedPrice(startHash, endHash, type);
 
-  const distanceKm = distanceMatrix.distance.value / 1000;
-  
-  // Basic pricing model:
-  // Car: base ₹50 + ₹10/km
-  // Bike: base ₹20 + ₹5/km
-  let suggestedPrice = 0;
-  if (type === 'car') {
-    suggestedPrice = 50 + (distanceKm * 10);
-  } else {
-    suggestedPrice = 20 + (distanceKm * 5);
-  }
+  const result = await withCache(cacheKey, TTL.SUGGESTED_PRICE, async () => {
+    const distanceMatrix = await getDistance(
+      [`${startLat},${startLng}`],
+      [`${endLat},${endLng}`],
+    );
+    if (!distanceMatrix || distanceMatrix.status !== 'OK') {
+      throw new AppError('Could not calculate distance', 500);
+    }
 
-  // Round to nearest 5
-  suggestedPrice = Math.round(suggestedPrice / 5) * 5;
+    const distanceKm = distanceMatrix.distance.value / 1000;
+    let suggestedPrice = type === 'car'
+      ? 50 + distanceKm * 10
+      : 20 + distanceKm * 5;
+    suggestedPrice = Math.round(suggestedPrice / 5) * 5;
 
-  return formatResponse(res, 200, 'Suggested price calculated', {
-    suggestedPrice,
-    distanceKm: Math.round(distanceKm * 10) / 10,
-    durationMinutes: Math.round(distanceMatrix.duration.value / 60)
+    return {
+      suggestedPrice,
+      distanceKm:      Math.round(distanceKm * 10) / 10,
+      durationMinutes: Math.round(distanceMatrix.duration.value / 60),
+    };
   });
+
+  return formatResponse(res, 200, 'Suggested price calculated', result);
 });
 
 import { io } from '../../server';
@@ -78,15 +81,20 @@ export const getActiveRide = asyncHandler(async (req: Request, res: Response) =>
   const ride = await Ride.findOne({
     $or: [{ provider: req.user.id }, { 'passengers.seeker': req.user.id }],
     status: { $in: ['active', 'in_progress'] },
-  }).populate('provider', 'name profilePhoto rating').populate('passengers.seeker', 'name profilePhoto');
-  
+  })
+    .select('provider vehicle route seats price status passengers detourThresholdKm')
+    .populate('provider', 'name profilePhoto rating vehicle.type vehicle.plateNumber')
+    .populate('passengers.seeker', 'name profilePhoto')
+    .lean();
+
   return formatResponse(res, 200, 'Active ride fetched', ride);
 });
 
 export const getRideDetails = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const ride = await Ride.findById(req.params.rideId)
     .populate('provider', 'name profilePhoto rating vehicle stats')
-    .populate('passengers.seeker', 'name profilePhoto rating');
+    .populate('passengers.seeker', 'name profilePhoto rating')
+    .lean();
   if (!ride) return next(new AppError('Ride not found', 404));
   return formatResponse(res, 200, 'Ride details fetched', ride);
 });
@@ -221,17 +229,25 @@ export const acceptRequest = asyncHandler(async (req: Request, res: Response, ne
 
   if (!request) return next(new AppError('Request not found or not pending', 404));
 
-  // Notify seeker via socket (server-side relay)
-  const seekerSid = await redisClient.get(`socket:${request.seeker}`);
+  // Parallelize: decrement seat count + notify seeker concurrently
+  const [seekerSid] = await Promise.all([
+    redisClient.get(`socket:${request.seeker}`),
+    Ride.updateOne({ _id: rideId }, { $inc: { 'seats.available': -1 } }),
+  ]);
+
   if (seekerSid) {
     getIO().of('/rides').to(seekerSid).emit('ride:accepted', {
       rideId,
       requestId,
       seekerId: String(request.seeker),
       otp,
-      providerLocation: null, // seeker will get live location via Firebase RTDB
+      providerLocation: null,
     });
   }
+  // Also broadcast to ride room (provider + seeker both joined it)
+  getIO().of('/rides').to(`ride:${rideId}`).emit('ride:accepted', {
+    rideId, requestId, otp,
+  });
 
   return formatResponse(res, 200, 'Request accepted', request);
 });
@@ -313,15 +329,31 @@ export const verifyPassengerOTP = asyncHandler(async (req: Request, res: Respons
 });
 
 export const getRideHistory = asyncHandler(async (req: Request, res: Response) => {
-  const { role = 'seeker', page = 1, limit = 10 } = req.query as any;
-  const query = role === 'provider' ? { provider: req.user.id } : { 'passengers.seeker': req.user.id };
-  
-  const rides = await Ride.find(query)
-    .sort({ createdAt: -1 })
-    .skip((page - 1) * limit)
-    .limit(limit);
-  
-  const total = await Ride.countDocuments(query);
+  const role  = (req.query.role as string) || 'seeker';
+  const page  = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit as string) || 10);
+  const skip  = (page - 1) * limit;
 
-  return formatResponse(res, 200, 'History fetched', rides, { page, total, totalPages: Math.ceil(total / limit) });
+  const query = role === 'provider'
+    ? { provider: req.user.id, status: { $in: ['completed', 'cancelled'] } }
+    : { 'passengers.seeker': req.user.id, status: { $in: ['completed', 'cancelled'] } };
+
+  // Fetch rides + total count in parallel
+  const [rides, total] = await Promise.all([
+    Ride.find(query)
+      .select('route price status seats vehicle createdAt completedAt cancelledAt passengers')
+      .populate('provider', 'name profilePhoto rating')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Ride.countDocuments(query),
+  ]);
+
+  return formatResponse(res, 200, 'History fetched', rides, {
+    page,
+    limit,
+    total,
+    totalPages: Math.ceil(total / limit),
+  });
 });

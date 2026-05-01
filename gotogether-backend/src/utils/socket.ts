@@ -11,7 +11,7 @@ const makeAuthMiddleware = () => async (socket: Socket, next: (err?: Error) => v
 
   try {
     const decoded: any = jwt.verify(token as string, process.env.JWT_ACCESS_SECRET as string);
-    socket.data.userId = decoded.id;
+    socket.data.userId = decoded.userId ?? decoded.id; // support both field names
     socket.data.role   = decoded.role;
     next();
   } catch {
@@ -33,8 +33,13 @@ export const getIO = () => {
 export const initSocket = (server: HTTPServer) => {
   const io = new SocketIOServer(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
+    // Enable per-message deflate compression for smaller payloads
+    perMessageDeflate: {
+      threshold: 1024,          // only compress payloads > 1 KB
+      zlibDeflateOptions: { level: 6 },
+    },
   });
-  
+
   ioInstance = io;
 
   // ── Namespaces ─────────────────────────────────────────────────────────────

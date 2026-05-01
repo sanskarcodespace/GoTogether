@@ -38,11 +38,15 @@ const notificationSchema: Schema = new Schema(
     title: { type: String, required: true },
     body: { type: String, required: true },
     data: { type: Schema.Types.Mixed },
-    isRead: { type: Boolean, default: false, index: true },
+    isRead:    { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now, index: { expires: '30d' } }, // TTL: 30 days
   },
   { timestamps: false }
 );
+
+// Compound indexes for fast per-user notification queries
+notificationSchema.index({ user: 1, isRead: 1 });
+notificationSchema.index({ user: 1, createdAt: -1 });
 
 const Notification = mongoose.model<INotification>('Notification', notificationSchema);
 

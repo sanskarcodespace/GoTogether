@@ -5,11 +5,14 @@ import { useIsFocused } from '@react-navigation/native';
 import { Colors } from '../../constants/Colors';
 import { Typography } from '../../constants/Typography';
 import { Spacing } from '../../constants/Spacing';
-import { Button, RouteInput, RideCard, SafeScreen, Chip, EmptyState, LoadingOverlay } from '../../components';
+import { Button, RouteInput, RideCard, SafeScreen, Chip, EmptyState } from '../../components';
 import { rideService } from '../../services/rideService';
 import { useRideStore } from '../../store/rideStore';
 import { useLocationStore } from '../../store/locationStore';
 import { useApi } from '../../hooks/useApi';
+
+// Fixed card height enables getItemLayout — avoids layout measurement overhead
+const RIDE_CARD_HEIGHT = 140;
 
 const SearchRideScreen = ({ navigation }: any) => {
   const [from, setFrom] = useState<{ address: string; lat: number; lng: number } | null>(null);
@@ -127,14 +130,14 @@ const SearchRideScreen = ({ navigation }: any) => {
       ) : (
         <FlatList
           data={filteredAndSortedResults}
-          keyExtractor={(item) => item._id || item.id}
+          keyExtractor={(item) => item._id}
           refreshControl={
             <RefreshControl refreshing={isLoading} onRefresh={handleSearch} />
           }
           renderItem={({ item }) => (
             <RideCard
               ride={item}
-              onPress={() => navigation.navigate('RideDetail', { rideId: item._id || item.id })}
+              onPress={() => navigation.navigate('RideDetail', { rideId: item._id })}
             />
           )}
           ListEmptyComponent={
@@ -145,6 +148,16 @@ const SearchRideScreen = ({ navigation }: any) => {
             />
           }
           contentContainerStyle={styles.list}
+          // ─── Performance optimizations ────────────────────────────────────
+          removeClippedSubviews
+          maxToRenderPerBatch={5}
+          windowSize={5}
+          initialNumToRender={8}
+          getItemLayout={(_data, index) => ({
+            length: RIDE_CARD_HEIGHT,
+            offset: RIDE_CARD_HEIGHT * index,
+            index,
+          })}
         />
       )}
     </SafeScreen>
