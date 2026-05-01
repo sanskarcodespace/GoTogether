@@ -1,108 +1,171 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Dimensions, TouchableOpacity } from 'react-native';
+/**
+ * TrackRideScreen — Seeker side
+ *
+ * Responsibilities:
+ *  • Subscribe to Firebase RTDB for live provider GPS (primary)
+ *  • Subscribe to /tracking socket for GPS (fallback)
+ *  • Smooth map animation on each update
+ *  • Poll Distance Matrix API every 30 s for ETA
+ *  • Display ride timeline & OTP
+ *  • Allow seeker to cancel ride
+ */
+
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, Dimensions, TouchableOpacity, Alert,
+} from 'react-native';
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from 'react-native-maps';
-import * as Location from 'expo-location';
-import { Colors } from '../../constants/Colors';
-import { Typography } from '../../constants/Typography';
-import { Spacing, BorderRadius } from '../../constants/Spacing';
-import { Button, Card, Avatar, SOSButton, MapPin } from '../../components';
+import { ref, onValue, off } from 'firebase/database';
 import { Ionicons } from '@expo/vector-icons';
-import { useRideStore } from '../../store/rideStore';
-import { getDatabase, ref, onValue } from 'firebase/database';
-import { app } from '../../config/firebase'; // Assume exists
-import api from '../../services/api';
+
+import { Colors }                 from '../../constants/Colors';
+import { Typography }             from '../../constants/Typography';
+import { Spacing, BorderRadius }  from '../../constants/Spacing';
+import { Button, Card, Avatar, SOSButton, MapPin } from '../../components';
+import { database }              from '../../config/firebase';
+import { socketService }         from '../../services/socketService';
+import { useRideStore }          from '../../store/rideStore';
+import { useAuthStore }          from '../../store/authStore';
+import api                        from '../../services/api';
 
 const { width } = Dimensions.get('window');
 
-const STATUS_ICONS: any = {
-  accepted: 'checkmark-circle-outline',
-  en_route: 'car-outline',
-  arrived: 'location-outline',
-  in_progress: 'play-circle-outline',
-  completed: 'flag-outline',
-};
+// ─── Ride timeline steps ──────────────────────────────────────────────────────
+const STEPS = [
+  { key: 'accepted',    icon: 'checkmark-circle-outline', label: 'Accepted' },
+  { key: 'en_route',   icon: 'car-outline',               label: 'En Route' },
+  { key: 'arrived',    icon: 'location-outline',          label: 'Arrived' },
+  { key: 'in_progress',icon: 'play-circle-outline',       label: 'In Ride' },
+  { key: 'completed',  icon: 'flag-outline',              label: 'Done' },
+] as const;
 
+const stepIndex = (status: string) => STEPS.findIndex(s => s.key === status);
+
+// ─── Component ────────────────────────────────────────────────────────────────
 const TrackRideScreen = ({ navigation, route }: any) => {
-  const mapRef = useRef<MapView>(null);
-  const { activeRide } = useRideStore();
-  const [providerLocation, setProviderLocation] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [eta, setEta] = useState<string>('Calculating...');
-  
-  // Status could be derived from activeRide.status or local calculation (e.g. distance < 200m)
-  const currentStatus = activeRide?.status || 'accepted';
+  const mapRef           = useRef<MapView>(null);
+  const { activeRide }   = useRideStore();
+  const { user }         = useAuthStore();
+  const rideId           = route.params?.rideId ?? activeRide?._id;
 
-  // Real-time provider location from RTDB
+  const [providerCoord, setProviderCoord] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [eta,           setEta]           = useState('Calculating…');
+  const currentStatus                     = activeRide?.status ?? 'accepted';
+
+  // ── Firebase RTDB subscription (primary GPS source) ───────────────────────
   useEffect(() => {
-    if (!activeRide?._id) return;
-    const db = getDatabase(app);
-    const locationRef = ref(db, `active_rides/${activeRide._id}/provider_location`);
-    
-    const unsubscribe = onValue(locationRef, (snapshot) => {
+    if (!rideId) return;
+
+    const locationRef = ref(database, `active_rides/${rideId}/provider_location`);
+
+    const handleSnapshot = (snapshot: any) => {
       const data = snapshot.val();
-      if (data && data.lat && data.lng) {
-        setProviderLocation({ latitude: data.lat, longitude: data.lng });
-      }
-    });
-
-    return () => unsubscribe();
-  }, [activeRide?._id]);
-
-  // Smooth camera pan when provider location changes
-  useEffect(() => {
-    if (providerLocation && mapRef.current) {
-      mapRef.current.animateCamera({
-        center: providerLocation,
-        pitch: 0,
-        heading: 0,
-        altitude: 1000,
-        zoom: 15,
-      });
-    }
-  }, [providerLocation]);
-
-  // ETA Calculation every 30s
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-
-    const fetchEta = async () => {
-      if (!providerLocation || !activeRide?.fromCoordinates) return;
-      try {
-        const response = await api.get('/rides/suggested-price', {
-          params: {
-            startLat: providerLocation.latitude,
-            startLng: providerLocation.longitude,
-            endLat: activeRide.fromCoordinates.latitude,
-            endLng: activeRide.fromCoordinates.longitude,
-            type: 'car'
-          }
-        });
-        if (response.data.data.durationMinutes) {
-          setEta(`${response.data.data.durationMinutes} mins`);
-        }
-      } catch (e) {
-        console.log('ETA fetch error', e);
+      if (data?.lat && data?.lng) {
+        setProviderCoord({ latitude: data.lat, longitude: data.lng });
       }
     };
 
-    fetchEta();
-    interval = setInterval(fetchEta, 30000);
+    onValue(locationRef, handleSnapshot);
+    return () => off(locationRef, 'value', handleSnapshot);
+  }, [rideId]);
 
+  // ── Socket /tracking fallback ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!rideId) return;
+
+    socketService.joinRideRoom(rideId);
+
+    const trackingSocket = socketService.trackingSocket;
+    const handler = (data: { lat: number; lng: number }) => {
+      // Only use if Firebase hasn't already updated (Firebase takes priority)
+      setProviderCoord(prev => prev ?? { latitude: data.lat, longitude: data.lng });
+    };
+
+    trackingSocket?.on('provider_location', handler);
+    return () => {
+      trackingSocket?.off('provider_location', handler);
+    };
+  }, [rideId]);
+
+  // ── Smooth map animation on GPS update ────────────────────────────────────
+  useEffect(() => {
+    if (providerCoord && mapRef.current) {
+      mapRef.current.animateCamera({
+        center: providerCoord,
+        zoom: 15,
+        pitch: 0,
+        heading: 0,
+        altitude: 1000,
+      });
+    }
+  }, [providerCoord]);
+
+  // ── ETA polling every 30 s ────────────────────────────────────────────────
+  const fetchEta = useCallback(async () => {
+    if (!providerCoord || !activeRide?.fromCoordinates) return;
+    try {
+      const res = await api.get('/rides/suggested-price', {
+        params: {
+          startLat: providerCoord.latitude,
+          startLng: providerCoord.longitude,
+          endLat:   activeRide.fromCoordinates.latitude,
+          endLng:   activeRide.fromCoordinates.longitude,
+          type: 'car',
+        },
+      });
+      const mins = res.data?.data?.durationMinutes;
+      if (mins !== undefined) setEta(`${mins} min`);
+    } catch {
+      // Silent — show cached value
+    }
+  }, [providerCoord, activeRide?.fromCoordinates]);
+
+  useEffect(() => {
+    fetchEta();
+    const interval = setInterval(fetchEta, 30_000);
     return () => clearInterval(interval);
-  }, [providerLocation, activeRide?.fromCoordinates]);
+  }, [fetchEta]);
+
+  // ── Cancel ride (seeker side) ─────────────────────────────────────────────
+  const handleCancelRide = () => {
+    Alert.alert('Cancel Ride', 'Are you sure you want to cancel?', [
+      { text: 'Back', style: 'cancel' },
+      {
+        text: 'Cancel',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await api.put(`/rides/${rideId}/cancel`, { reason: 'Cancelled by seeker' });
+            socketService.emitCancelRide({
+              rideId,
+              by: 'seeker',
+              reason: 'Seeker cancelled the ride.',
+              otherPartyId: activeRide?.provider?._id ?? '',
+            });
+            navigation.replace('SearchRide');
+          } catch {
+            Alert.alert('Error', 'Could not cancel. Please try again.');
+          }
+        },
+      },
+    ]);
+  };
 
   return (
     <View style={styles.container}>
+      {/* ── Map ─────────────────────────────────────────────────────────── */}
       <MapView
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         style={styles.map}
         initialRegion={{
-          latitude: activeRide?.fromCoordinates?.latitude || 28.6139,
-          longitude: activeRide?.fromCoordinates?.longitude || 77.209,
-          latitudeDelta: 0.05,
+          latitude:  activeRide?.fromCoordinates?.latitude  ?? 28.6139,
+          longitude: activeRide?.fromCoordinates?.longitude ?? 77.209,
+          latitudeDelta:  0.05,
           longitudeDelta: 0.02,
         }}
       >
+        {/* Route polyline */}
         {activeRide?.routePolyline && (
           <Polyline
             coordinates={activeRide.routePolyline}
@@ -110,13 +173,15 @@ const TrackRideScreen = ({ navigation, route }: any) => {
             strokeColor={Colors.primary}
           />
         )}
-        
-        {providerLocation && (
-          <Marker coordinate={providerLocation} anchor={{ x: 0.5, y: 0.5 }}>
+
+        {/* Provider marker */}
+        {providerCoord && (
+          <Marker coordinate={providerCoord} anchor={{ x: 0.5, y: 0.5 }}>
             <MapPin type="provider" active />
           </Marker>
         )}
-        
+
+        {/* Pickup marker */}
         {activeRide?.fromCoordinates && (
           <Marker coordinate={activeRide.fromCoordinates} anchor={{ x: 0.5, y: 1 }}>
             <MapPin type="destination" />
@@ -124,59 +189,84 @@ const TrackRideScreen = ({ navigation, route }: any) => {
         )}
       </MapView>
 
+      {/* ── Back button ─────────────────────────────────────────────────── */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="chevron-back" size={24} color={Colors.dark} />
         </TouchableOpacity>
       </View>
 
+      {/* ── SOS ─────────────────────────────────────────────────────────── */}
       <View style={styles.sosContainer}>
-        <SOSButton rideId={activeRide?._id} />
+        <SOSButton rideId={rideId} />
       </View>
 
+      {/* ── Bottom info card ─────────────────────────────────────────────── */}
       <View style={styles.bottomCard}>
         <Card variant="elevated" padding="lg">
+
+          {/* Timeline */}
           <View style={styles.timelineRow}>
-             {Object.keys(STATUS_ICONS).map((status, index) => (
-                <View key={status} style={styles.timelineItem}>
-                  <Ionicons 
-                    name={STATUS_ICONS[status]} 
-                    size={20} 
-                    color={currentStatus === status || Object.keys(STATUS_ICONS).indexOf(currentStatus) > index ? Colors.secondary : Colors.muted} 
-                  />
-                  {index < Object.keys(STATUS_ICONS).length - 1 && <View style={styles.timelineLine} />}
+            {STEPS.map((step, idx) => {
+              const past   = stepIndex(currentStatus) > idx;
+              const active = currentStatus === step.key;
+              const color  = past || active ? Colors.secondary : Colors.muted;
+              return (
+                <View key={step.key} style={styles.timelineItem}>
+                  <Ionicons name={step.icon as any} size={20} color={color} />
+                  {idx < STEPS.length - 1 && (
+                    <View style={[styles.timelineLine, past && styles.timelineLineActive]} />
+                  )}
                 </View>
-             ))}
+              );
+            })}
           </View>
 
+          {/* ETA + OTP */}
           <View style={styles.etaRow}>
             <View>
               <Text style={styles.etaLabel}>Estimated Arrival</Text>
               <Text style={styles.etaValue}>{eta}</Text>
             </View>
             <View style={styles.otpContainer}>
-              <Text style={styles.otpLabel}>Ride OTP</Text>
-              <Text style={styles.otpValue}>{activeRide?.otp?.code || '----'}</Text>
+              <Text style={styles.otpLabel}>Your OTP</Text>
+              <Text style={styles.otpValue}>{activeRide?.otp?.code ?? '----'}</Text>
             </View>
           </View>
 
           <View style={styles.divider} />
 
+          {/* Provider info */}
           <View style={styles.providerRow}>
-            <Avatar name={activeRide?.provider?.name || 'Provider'} size="md" />
+            <Avatar name={activeRide?.provider?.name ?? 'Provider'} size="md" />
             <View style={styles.providerInfo}>
               <Text style={styles.providerName}>{activeRide?.provider?.name}</Text>
-              <Text style={styles.vehicleInfo}>{activeRide?.vehicle?.details || 'Vehicle'} • {activeRide?.vehicle?.plateNumber || 'DL 01'}</Text>
+              <Text style={styles.vehicleInfo}>
+                {activeRide?.vehicle?.details ?? 'Vehicle'} •{' '}
+                {activeRide?.vehicle?.plateNumber ?? '——'}
+              </Text>
             </View>
             <TouchableOpacity style={styles.callBtn}>
               <Ionicons name="call" size={20} color={Colors.white} />
             </TouchableOpacity>
           </View>
 
+          {/* Cancel button */}
+          {currentStatus !== 'completed' && currentStatus !== 'in_progress' && (
+            <Button
+              label="Cancel Ride"
+              variant="outline"
+              onPress={handleCancelRide}
+              fullWidth
+              style={styles.cancelBtn}
+            />
+          )}
+
+          {/* Done — shown after completion (navigation driven by socket) */}
           {currentStatus === 'completed' && (
             <Button
-              label="Ride Completed"
-              onPress={() => navigation.navigate('RideCompleted', { rideId: activeRide?._id })}
+              label="View Summary"
+              onPress={() => navigation.replace('RideCompleted', { rideId })}
               fullWidth
               style={styles.doneBtn}
             />
@@ -187,118 +277,54 @@ const TrackRideScreen = ({ navigation, route }: any) => {
   );
 };
 
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  container:           { flex: 1 },
+  map:                 { ...StyleSheet.absoluteFillObject },
+  header:              { position: 'absolute', top: 60, left: 20 },
+  backBtn:             {
+    backgroundColor: Colors.white, padding: 10,
+    borderRadius: BorderRadius.full, elevation: 4,
   },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  header: {
-    position: 'absolute',
-    top: 60,
-    left: 20,
-  },
-  backBtn: {
-    backgroundColor: Colors.white,
-    padding: 10,
-    borderRadius: BorderRadius.full,
-    elevation: 4,
-  },
-  sosContainer: {
-    position: 'absolute',
-    right: 20,
-    top: 60,
-  },
-  bottomCard: {
-    position: 'absolute',
-    bottom: 40,
-    left: 20,
-    right: 20,
-  },
-  etaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: Spacing.md,
-  },
-  etaLabel: {
-    fontSize: Typography.size.xs,
-    color: Colors.muted,
-  },
-  etaValue: {
-    fontFamily: Typography.family.display,
-    fontSize: Typography.size.xl,
-    color: Colors.secondary,
-    fontWeight: 'bold',
-  },
-  otpContainer: {
-    alignItems: 'flex-end',
-  },
-  otpLabel: {
-    fontSize: Typography.size.xs,
-    color: Colors.muted,
-  },
-  otpValue: {
-    fontFamily: Typography.family.mono,
-    fontSize: Typography.size.lg,
-    color: Colors.primary,
-    fontWeight: 'bold',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: Colors.border,
-    marginVertical: Spacing.md,
-  },
-  providerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: Spacing.lg,
-  },
-  providerInfo: {
-    flex: 1,
-    marginLeft: Spacing.md,
-  },
-  providerName: {
-    fontFamily: Typography.family.body,
-    fontSize: Typography.size.base,
-    fontWeight: 'bold',
-    color: Colors.dark,
-  },
-  vehicleInfo: {
-    fontSize: Typography.size.xs,
-    color: Colors.muted,
-  },
-  callBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.secondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  doneBtn: {
-    height: 50,
-  },
-  timelineRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: Spacing.md,
+  sosContainer:        { position: 'absolute', right: 20, top: 60 },
+  bottomCard:          { position: 'absolute', bottom: 40, left: 20, right: 20 },
+  timelineRow:         {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: Spacing.md,
     paddingHorizontal: Spacing.sm,
   },
-  timelineItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
+  timelineItem:        { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  timelineLine:        { flex: 1, height: 2, backgroundColor: Colors.border, marginHorizontal: 5 },
+  timelineLineActive:  { backgroundColor: Colors.secondary },
+  etaRow:              {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: Spacing.md,
   },
-  timelineLine: {
-    flex: 1,
-    height: 2,
-    backgroundColor: Colors.border,
-    marginHorizontal: 5,
+  etaLabel:            { fontSize: Typography.size.xs, color: Colors.muted },
+  etaValue:            {
+    fontFamily: Typography.family.display,
+    fontSize: Typography.size.xl, color: Colors.secondary, fontWeight: 'bold',
   },
+  otpContainer:        { alignItems: 'flex-end' },
+  otpLabel:            { fontSize: Typography.size.xs, color: Colors.muted },
+  otpValue:            {
+    fontFamily: Typography.family.mono,
+    fontSize: Typography.size.lg, color: Colors.primary, fontWeight: 'bold',
+  },
+  divider:             { height: 1, backgroundColor: Colors.border, marginVertical: Spacing.md },
+  providerRow:         { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.lg },
+  providerInfo:        { flex: 1, marginLeft: Spacing.md },
+  providerName:        {
+    fontFamily: Typography.family.body, fontSize: Typography.size.base,
+    fontWeight: 'bold', color: Colors.dark,
+  },
+  vehicleInfo:         { fontSize: Typography.size.xs, color: Colors.muted },
+  callBtn:             {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Colors.secondary,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  cancelBtn:           { marginTop: Spacing.sm },
+  doneBtn:             { height: 50 },
 });
 
 export default TrackRideScreen;

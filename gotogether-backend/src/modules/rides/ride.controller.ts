@@ -39,6 +39,8 @@ export const getSuggestedPrice = asyncHandler(async (req: Request, res: Response
   });
 });
 
+import { io } from '../../server';
+
 export const createRide = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   if (!req.user.vehicle?.plateNumber) {
     return next(new AppError('Please set up your vehicle details first', 403));
@@ -48,6 +50,10 @@ export const createRide = asyncHandler(async (req: Request, res: Response, next:
   if (activeRide) return next(new AppError('You already have an active ride', 409));
 
   const ride = await rideService.createNewRide(req.user.id, req.body);
+
+  // Broadcast to all seekers
+  io.of('/rides').emit('new_ride_available', ride);
+
   return formatResponse(res, 201, 'Ride created successfully', ride);
 });
 
@@ -152,15 +158,32 @@ export const requestRide = asyncHandler(async (req: Request, res: Response, next
   const existingRequest = await RideRequest.findOne({ ride: rideId, seeker: req.user.id });
   if (existingRequest) return next(new AppError('Request already sent', 409));
 
-  const ride = await Ride.findById(rideId);
+  const ride = await Ride.findById(rideId).populate('provider', 'name');
   if (!ride || ride.status !== 'active') return next(new AppError('Ride not available', 404));
 
   const request = await RideRequest.create({
     ride: rideId,
     seeker: req.user.id,
     ...req.body,
-    expiresAt: new Date(Date.now() + 30000), // 30 sec expiry
+    expiresAt: new Date(Date.now() + 30_000),
   });
+
+  // Notify provider via socket (server-side relay)
+  const { getRedisClient } = await import('../../../config/redis');
+  const redis = getRedisClient();
+  const providerSid = await redis.get(`socket:${(ride.provider as any)._id}`);
+  if (providerSid) {
+    io.of('/rides').to(providerSid).emit('ride:new_request', {
+      rideId,
+      requestId: String(request._id),
+      seeker: {
+        _id:          req.user.id,
+        name:         req.user.name,
+        profilePhoto: req.user.profilePhoto,
+      },
+      ...req.body,
+    });
+  }
 
   return formatResponse(res, 201, 'Request sent', request);
 });
@@ -168,16 +191,57 @@ export const requestRide = asyncHandler(async (req: Request, res: Response, next
 export const acceptRequest = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
   const { rideId, requestId } = req.params;
   const otp = Math.floor(1000 + Math.random() * 9000).toString();
-  
+
   const request = await RideRequest.findOneAndUpdate(
     { _id: requestId, ride: rideId, status: 'pending' },
     { status: 'accepted', acceptedAt: new Date(), otp: { code: otp, verified: false } },
-    { new: true }
+    { new: true },
   );
-  
+
   if (!request) return next(new AppError('Request not found or not pending', 404));
 
+  // Notify seeker via socket (server-side relay)
+  const { getRedisClient } = await import('../../../config/redis');
+  const redis = getRedisClient();
+  const seekerSid = await redis.get(`socket:${request.seeker}`);
+  if (seekerSid) {
+    io.of('/rides').to(seekerSid).emit('ride:accepted', {
+      rideId,
+      requestId,
+      seekerId: String(request.seeker),
+      otp,
+      providerLocation: null, // seeker will get live location via Firebase RTDB
+    });
+  }
+
   return formatResponse(res, 200, 'Request accepted', request);
+});
+
+export const rejectRequest = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+  const { rideId, requestId } = req.params;
+  const { reason = 'Request declined by provider' } = req.body;
+
+  const request = await RideRequest.findOneAndUpdate(
+    { _id: requestId, ride: rideId, status: 'pending' },
+    { status: 'rejected', rejectedAt: new Date() },
+    { new: true },
+  );
+
+  if (!request) return next(new AppError('Request not found or not pending', 404));
+
+  // Notify seeker via socket (server-side relay)
+  const { getRedisClient } = await import('../../../config/redis');
+  const redis = getRedisClient();
+  const seekerSid = await redis.get(`socket:${request.seeker}`);
+  if (seekerSid) {
+    io.of('/rides').to(seekerSid).emit('ride:rejected', {
+      rideId,
+      requestId,
+      reason,
+    });
+  }
+
+  return formatResponse(res, 200, 'Request rejected');
 });
 
 export const verifyPassengerOTP = asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
