@@ -3,7 +3,9 @@ import * as SecureStore from 'expo-secure-store';
 import { useAuthStore } from '../store/authStore';
 import { showToast } from '../utils/toast';
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:5000/api/v1';
+import { Platform } from 'react-native';
+
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:5001/api/v1' : 'http://localhost:5001/api/v1');
 
 const api = axios.create({
   baseURL: API_BASE_URL,

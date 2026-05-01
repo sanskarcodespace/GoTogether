@@ -8,6 +8,8 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import errorHandler from './middleware/errorHandler';
 import { AppError } from './utils/response';
+import mongoose from 'mongoose';
+import redisClient from './config/redis';
 
 // Import Routes
 import authRoutes from './modules/auth/auth.routes';
@@ -45,9 +47,16 @@ app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(morgan('dev'));
 
-// Routes
+// Health Check endpoint for uptime monitoring
 app.get('/health', (req, res) => {
-  res.status(200).json({ success: true, message: 'Server is healthy' });
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  const redisStatus = redisClient.status === 'ready' ? 'connected' : 'disconnected';
+  
+  res.status(200).json({
+    status: dbStatus === 'connected' && redisStatus === 'connected' ? 'ok' : 'degraded',
+    db: dbStatus,
+    redis: redisStatus,
+  });
 });
 
 app.use('/api/v1/auth', authRoutes);
@@ -60,7 +69,7 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 
 // 404 Handler
-app.all('*', (req: Request, res: Response, next: NextFunction) => {
+app.all(/(.*)/, (req: Request, res: Response, next: NextFunction) => {
   next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 });
 

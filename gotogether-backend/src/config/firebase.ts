@@ -10,14 +10,20 @@ const firebaseConfig = {
 };
 
 if (firebaseConfig.projectId && firebaseConfig.privateKey && firebaseConfig.clientEmail) {
-  admin.initializeApp({
-    credential: admin.credential.cert(firebaseConfig),
-    databaseURL: process.env.FIREBASE_DATABASE_URL,
-  });
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert(firebaseConfig),
+      databaseURL: process.env.FIREBASE_DATABASE_URL,
+    });
+  } catch (error) {
+    console.warn('Firebase initialization failed (check private key/env vars).');
+  }
+} else {
+  console.warn('Firebase config missing. Firebase features will not work.');
 }
 
-export const db = admin.database();
-export const fcm = admin.messaging();
-export const auth = admin.auth();
+export const db = admin.apps.length ? admin.database() : ({} as any);
+export const fcm = admin.apps.length ? admin.messaging() : ({} as any);
+export const auth = admin.apps.length ? admin.auth() : ({} as any);
 
 export default admin;

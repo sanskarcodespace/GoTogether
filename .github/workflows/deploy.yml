@@ -1,0 +1,69 @@
+name: GoTogether CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: './gotogether-backend/package-lock.json'
+          
+      - name: Install Dependencies & Test Backend
+        working-directory: ./gotogether-backend
+        run: |
+          npm ci
+          # npm run lint
+          # npm run type-check
+          # npm test
+
+  deploy-backend:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Example of pushing to Docker Hub or AWS ECR (pseudo-code depending on choice)
+      # - name: Build and Push Docker image
+      #   uses: docker/build-push-action@v5
+      #   with:
+      #     context: ./gotogether-backend
+      #     push: true
+      #     tags: gotogether/api:latest
+
+      # Example: Deploying to Railway via CLI
+      - name: Deploy to Railway
+        working-directory: ./gotogether-backend
+        run: |
+          npm install -g @railway/cli
+          # railway up --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-admin:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Vercel deployment action
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v20
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./gotogether-admin
+          vercel-args: '--prod'
